@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev \
-            libx11-dev libxtst-dev \
+            libx11-dev libxtst-dev libxi-dev \
             build-essential curl wget file \
             libssl-dev libglib2.0-dev patchelf
 
@@ -139,7 +139,7 @@ jobs:
     name: Publish GitHub Release
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    if: (startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true') && always() && (needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     permissions:
       contents: write
 
@@ -150,12 +150,14 @@ jobs:
 
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
+        if: needs.build-linux.result == 'success'
         with:
           name: linux-deb
           path: release-assets/linux
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
+        if: needs.build-windows.result == 'success'
         with:
           name: windows-exe
           path: release-assets/windows
