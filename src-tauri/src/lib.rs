@@ -59,17 +59,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
     {
+        #[cfg(target_os = "windows")]
         let msg = if e.to_string().to_lowercase().contains("webview") {
             format!(
-                "InputSync could not start because Microsoft Edge WebView2 Runtime is missing or damaged.\n\n\
-                Error: {e}\n\n\
-                Fix: Download and install WebView2 from\n\
-                https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n\
+                "InputSync could not start because Microsoft Edge WebView2 Runtime is missing or damaged.\r\n\r\n\
+                Error: {e}\r\n\r\n\
+                Fix: Download and install WebView2 from\r\n\
+                https://go.microsoft.com/fwlink/p/?LinkId=2124703\r\n\r\n\
                 Then relaunch InputSync."
             )
         } else {
-            format!("InputSync failed to start.\n\nError: {e}")
+            format!("InputSync failed to start.\r\n\r\nError: {e}")
         };
+
+        #[cfg(not(target_os = "windows"))]
+        let msg = format!("InputSync failed to start.\n\nError: {e}");
+
         fatal_error(&msg);
     }
 }
