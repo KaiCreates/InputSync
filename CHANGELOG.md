@@ -7,6 +7,20 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.1] — 2026-03-07
+
+### Fixed
+
+**Windows:**
+- Installer appeared frozen during WebView2 download — NSIS hook now detects whether WebView2 is present. If missing, shows a dialog before the download begins: "The installer is NOT frozen — please wait." If already installed (most Windows 10/11), skips silently.
+- App silently failed to open when WebView2 was missing or damaged — replaced the silent panic with a native Windows MessageBoxW error dialog with exact fix steps and a download link.
+
+**Linux (Wayland/Hyprland):**
+- App showed no UI on Wayland compositors (Hyprland, etc.) — .desktop entry now launches with `GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1` to force XWayland.
+- Tray icon caused a startup panic — icons regenerated as 8-bit RGBA (were 16-bit, causing `ImageBufferSize` mismatch in the tray icon loader).
+
+---
+
 ## [1.0.0] — 2025-03-07
 
 ### Added
@@ -39,10 +53,6 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
 ## [Unreleased]
-
-### Fixed
-- Windows installer no longer appears frozen during WebView2 download: an NSIS hook now detects whether WebView2 is present and, if not, shows a dialog before the download begins explaining that the installer is running normally. Systems where WebView2 is already installed (most Windows 10/11) skip this step silently.
-- Windows app no longer silently fails to open when WebView2 is missing or damaged: replaced the silent panic with a native Windows MessageBoxW error dialog that displays the exact fix steps and a direct WebView2 download link. (commit d6d70dd)
 
 ### Planned — v1.1
 - Clipboard sync across machines
