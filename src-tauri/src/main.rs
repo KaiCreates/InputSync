@@ -40,6 +40,8 @@ pub enum UiCommand {
 #[derive(Debug, Clone)]
 pub enum NetEvent {
     StatusUpdate(crate::state::AppStatus),
+    /// Server is in the process of stopping — UI should show busy state
+    ServerStopping,
     Error(String),
     Connected,
     Disconnected,
@@ -97,10 +99,11 @@ async fn async_main(
             UiCommand::StartServer => {
                 let mut locked = shared.lock().await;
 
-                // Stop existing server if running
+                // Stop existing server if running, awaiting full port release
                 if let Some(srv) = locked.server.take() {
+                    let _ = net_tx.send(NetEvent::ServerStopping);
                     drop(srv.capture_handle);
-                    srv.handle.shutdown();
+                    srv.handle.shutdown().await; // waits until TcpListener is dropped
                 }
 
                 if locked.client.is_some() {
@@ -184,10 +187,14 @@ async fn async_main(
             UiCommand::StopServer => {
                 let mut locked = shared.lock().await;
                 if let Some(srv) = locked.server.take() {
+                    let _ = net_tx.send(NetEvent::ServerStopping);
                     drop(srv.capture_handle);
-                    srv.handle.shutdown();
+                    // Drop the lock before awaiting so the UI can still poll
+                    drop(locked);
+                    srv.handle.shutdown().await; // waits until TcpListener is dropped
                     tracing::info!("Server stopped");
-                    let _ = net_tx.send(NetEvent::StatusUpdate(locked.status()));
+                    let locked2 = shared.lock().await;
+                    let _ = net_tx.send(NetEvent::StatusUpdate(locked2.status()));
                 }
             }
 

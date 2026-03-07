@@ -15,11 +15,17 @@ use crate::core::protocol::{
 
 pub struct ServerHandle {
     cancel: CancellationToken,
+    /// Join handle for the TCP accept task. Awaiting this guarantees the
+    /// TcpListener has been dropped (port released) before returning.
+    tcp_task: tokio::task::JoinHandle<()>,
 }
 
 impl ServerHandle {
-    pub fn shutdown(self) {
+    /// Cancel the server and wait until the TCP accept loop has fully exited,
+    /// ensuring the port is released before the caller attempts to rebind.
+    pub async fn shutdown(self) {
         self.cancel.cancel();
+        let _ = self.tcp_task.await;
     }
 }
 
@@ -59,12 +65,13 @@ pub async fn start_server(
     let cancel_tcp = cancel.clone();
     let tls_clone = tls_acceptor.clone();
 
-    tokio::spawn(async move {
+    let tcp_task = tokio::spawn(async move {
         loop {
             tokio::select! {
                 biased;
                 _ = cancel_tcp.cancelled() => {
                     tracing::info!("TCP accept loop stopped, port {} released", control_port);
+                    // tcp_listener is dropped here, releasing the port immediately.
                     break;
                 }
                 result = tcp_listener.accept() => {
@@ -132,7 +139,7 @@ pub async fn start_server(
         tracing::info!("UDP broadcast loop exiting (input channel closed)");
     });
 
-    Ok(ServerHandle { cancel })
+    Ok(ServerHandle { cancel, tcp_task })
 }
 
 async fn handle_client_handshake<S>(

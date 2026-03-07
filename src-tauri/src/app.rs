@@ -46,9 +46,15 @@ impl InputSyncApp {
         while let Ok(ev) = self.net_rx.try_recv() {
             match ev {
                 NetEvent::StatusUpdate(s) => {
+                    // Server finished stopping — clear the busy flag
+                    self.ui.server_stopping = false;
                     self.status = s;
                 }
+                NetEvent::ServerStopping => {
+                    self.ui.server_stopping = true;
+                }
                 NetEvent::Error(e) => {
+                    self.ui.server_stopping = false;
                     self.ui.last_error = Some(e);
                 }
                 NetEvent::Connected => {
@@ -68,8 +74,13 @@ impl eframe::App for InputSyncApp {
         // Poll async events
         self.drain_events();
 
-        // Request repaint at ~30fps to keep status fresh
-        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        // Faster repaint while stopping so the spinner animates smoothly
+        let repaint_delay = if self.ui.server_stopping {
+            std::time::Duration::from_millis(50)
+        } else {
+            std::time::Duration::from_millis(500)
+        };
+        ctx.request_repaint_after(repaint_delay);
 
         // Apply dark theme
         ctx.set_visuals(egui::Visuals::dark());

@@ -11,6 +11,21 @@ pub fn show(
     status: &AppStatus,
     cmd_tx: &mpsc::UnboundedSender<UiCommand>,
 ) {
+    // Disable the entire panel while the server is stopping
+    let busy = ui_state.server_stopping;
+
+    if busy {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(egui::RichText::new("Stopping server…").italics().color(
+                egui::Color32::from_rgb(200, 180, 80),
+            ));
+        });
+        ui.add_space(4.0);
+    }
+
+    ui.add_enabled_ui(!busy, |ui| {
+
     // ── SERVER section ────────────────────────────────────────────────────
     ui.group(|ui| {
         ui.heading("SERVER");
@@ -132,6 +147,8 @@ pub fn show(
     });
 
     ui.add_space(6.0);
+
+    }); // end add_enabled_ui(!busy)
 
     // ── Status bar ────────────────────────────────────────────────────────
     ui.separator();

@@ -27,6 +27,10 @@ pub struct UiState {
     pub ip_input: String,
     pub last_error: Option<String>,
 
+    /// True while the server is in the process of stopping (port not yet released).
+    /// Buttons are disabled during this window.
+    pub server_stopping: bool,
+
     // Settings
     pub config_draft: ServerConfig,
 
@@ -41,6 +45,7 @@ impl UiState {
             code_input: String::new(),
             ip_input: String::new(),
             last_error: None,
+            server_stopping: false,
             config_draft: config,
             log_scroll_to_bottom: true,
         }
