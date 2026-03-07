@@ -1,6 +1,6 @@
 [package]
 name = "inputsync"
-version = "1.0.1"
+version = "1.0.2"
 description = "InputSync - Software KVM Switch"
 authors = ["InputSync"]
 edition = "2021"

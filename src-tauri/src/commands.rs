@@ -20,13 +20,19 @@ pub struct StartServerResult {
 }
 
 /// Start the server: generate session code, bind ports, start input capture.
+/// If a server is already running it is stopped automatically before the new
+/// one starts — no "address already in use" error on restart.
 #[tauri::command]
 pub async fn cmd_start_server(state: State<'_, SharedState>) -> Result<StartServerResult, String> {
     let mut locked = state.lock().await;
 
-    if locked.server.is_some() {
-        return Err("Server already running".into());
+    // Auto-stop any existing server so the user can restart cleanly.
+    if let Some(srv) = locked.server.take() {
+        drop(srv.capture_handle);
+        srv.handle.shutdown(); // cancels TCP loop → port 24800 released immediately
+        log::info!("Previous server stopped before restart");
     }
+
     if locked.client.is_some() {
         return Err("Cannot start server while connected as client".into());
     }

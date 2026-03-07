@@ -1,12 +1,14 @@
 /// Fix #5: client_count tracked via Arc<AtomicUsize> shared with ServerState
-/// Fix #6: Shutdown propagates through oneshot; TCP loop breaks on socket error
+/// Fix #6: Shutdown via CancellationToken — TCP accept loop cancels cleanly,
+///         releasing the port so a new server can bind immediately after stop.
 use anyhow::{bail, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 use crate::core::crypto::{combine_nonces, derive_session_key, EphemeralKeypair, SessionCipher};
 use crate::core::protocol::{
@@ -24,12 +26,14 @@ struct ConnectedClient {
 }
 
 pub struct ServerHandle {
-    shutdown_tx: oneshot::Sender<()>,
+    cancel: CancellationToken,
 }
 
 impl ServerHandle {
+    /// Cancel all server tasks. The TCP listener is dropped immediately,
+    /// releasing port 24800 so a new server can bind right away.
     pub fn shutdown(self) {
-        let _ = self.shutdown_tx.send(());
+        self.cancel.cancel();
     }
 }
 
@@ -38,7 +42,7 @@ pub async fn start_server(
     input_rx: mpsc::Receiver<InputPacket>,          // bounded channel
     client_count: Arc<AtomicUsize>,                 // shared with ServerState
 ) -> Result<ServerHandle> {
-    let (shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
+    let cancel = CancellationToken::new();
 
     let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", SERVER_TCP_PORT)).await?;
     let udp_socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", SERVER_UDP_PORT)).await?);
@@ -53,39 +57,51 @@ pub async fn start_server(
     let session_code = Arc::new(session_code);
 
     // ── TCP accept loop ────────────────────────────────────────────────────
+    // When cancel fires, the loop breaks and tcp_listener is dropped here,
+    // immediately releasing port 24800 for a new server start.
     let clients_tcp = clients.clone();
     let code_clone = session_code.clone();
     let count_tcp = client_count.clone();
+    let cancel_tcp = cancel.clone();
     tokio::spawn(async move {
         loop {
-            match tcp_listener.accept().await {
-                Ok((stream, addr)) => {
-                    log::info!("Incoming connection from {}", addr);
-                    let clients = clients_tcp.clone();
-                    let code = code_clone.clone();
-                    let count = count_tcp.clone();
-                    tokio::spawn(async move {
-                        match handle_client_handshake(stream, addr, code, clients.clone()).await {
-                            Ok(()) => {
-                                // Client cleanly disconnected; remove and decrement
-                                count.fetch_sub(1, Ordering::Relaxed);
-                                log::info!("Client {} session ended", addr);
-                            }
-                            Err(e) => {
-                                log::warn!("Handshake/session failed for {}: {}", addr, e);
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    log::error!("TCP accept error: {}", e);
+            tokio::select! {
+                biased;
+                _ = cancel_tcp.cancelled() => {
+                    log::info!("TCP accept loop stopped, port {} released", SERVER_TCP_PORT);
                     break;
+                }
+                result = tcp_listener.accept() => {
+                    match result {
+                        Ok((stream, addr)) => {
+                            log::info!("Incoming connection from {}", addr);
+                            let clients = clients_tcp.clone();
+                            let code = code_clone.clone();
+                            let count = count_tcp.clone();
+                            tokio::spawn(async move {
+                                match handle_client_handshake(stream, addr, code, clients.clone()).await {
+                                    Ok(()) => {
+                                        count.fetch_sub(1, Ordering::Relaxed);
+                                        log::info!("Client {} session ended", addr);
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Handshake/session failed for {}: {}", addr, e);
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("TCP accept error: {}", e);
+                            break;
+                        }
+                    }
                 }
             }
         }
     });
 
     // ── UDP broadcast loop ─────────────────────────────────────────────────
+    // Stops naturally when input_tx (held by ServerState) is dropped.
     let udp = udp_socket.clone();
     let clients_udp = clients.clone();
     let mut input_rx = input_rx;
@@ -109,7 +125,7 @@ pub async fn start_server(
         log::info!("UDP broadcast loop exiting (input channel closed)");
     });
 
-    Ok(ServerHandle { shutdown_tx })
+    Ok(ServerHandle { cancel })
 }
 
 /// Runs the full handshake, then keeps TCP alive until client disconnects.

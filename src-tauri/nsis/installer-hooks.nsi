@@ -1,9 +1,10 @@
 ; InputSync NSIS installer hooks
-; Called by Tauri's generated NSIS installer at key lifecycle points.
 
-; ── Check if WebView2 is already installed ──────────────────────────────────
+; ── Pre-install: inform user if WebView2 will be installed ──────────────────
+; With offlineInstaller mode, WebView2 is bundled — no download needed.
+; This hook just sets user expectations if WebView2 isn't already present.
 !macro NSIS_HOOK_PREINSTALL
-  ; Check per-machine WebView2 (GUID for Edge WebView2 Runtime)
+  ; Check per-machine WebView2 (written by EdgeUpdate, a 32-bit service)
   ReadRegStr $0 HKLM \
     "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" \
     "pv"
@@ -15,17 +16,16 @@
     "pv"
   StrCmp $0 "" 0 WebView2Found
 
-  ; WebView2 not found — warn user before download begins
+  ; WebView2 not found — bundled installer will handle it (no download needed)
   MessageBox MB_ICONINFORMATION|MB_OK \
     "InputSync requires the Microsoft Edge WebView2 Runtime.$\r$\n$\r$\n\
-It was not found on this machine, so the installer will download and install it now (~100 MB).$\r$\n$\r$\n\
-This may take a few minutes depending on your internet connection.$\r$\n\
-The installer is NOT frozen — please wait.$\r$\n$\r$\n\
+The runtime is bundled with this installer and will be set up automatically.$\r$\n\
+No internet connection is required.$\r$\n$\r$\n\
 Click OK to continue." \
     /SD IDOK
   Goto WebView2Done
 
   WebView2Found:
-    ; Already installed — nothing to do
+    ; Already installed — nothing extra to do
   WebView2Done:
 !macroend

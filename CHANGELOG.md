@@ -7,6 +7,19 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.2] — 2026-03-07
+
+### Fixed
+
+**Windows/Linux — Server restart (os error 98 "Address already in use"):**
+- Stopping and restarting the server showed "Address already in use" error — the TCP accept loop held port 24800 open indefinitely because the shutdown signal was never delivered (the oneshot receiver was immediately dropped). Replaced the broken oneshot with a `CancellationToken`; the TCP loop now exits and drops the `TcpListener` the instant `Stop Server` is clicked, releasing the port immediately.
+- `Start Server` now auto-stops any previously running server instead of returning "Server already running" — clicking Start Server always works even if a prior session wasn't explicitly stopped.
+
+**Windows — WebView2 required even on stripped Windows (Windows Lite, etc.):**
+- The app required WebView2 to be pre-installed or downloaded from the internet, breaking on lightweight/locked-down Windows installations. Switched NSIS installer to `offlineInstaller` mode — the full WebView2 runtime is now bundled inside the `.exe` installer (~150 MB total). No internet connection, no Microsoft services, and no manual WebView2 installation required.
+
+---
+
 ## [1.0.1] — 2026-03-07
 
 ### Fixed
