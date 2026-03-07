@@ -57,8 +57,8 @@ jobs:
         run: |
           mkdir -p pkg
           cp inputsync pkg/
-          sha256sum inputsync > pkg/SHA256SUMS.txt
-          cat pkg/SHA256SUMS.txt
+          sha256sum inputsync > pkg/SHA256SUMS-linux.txt
+          cat pkg/SHA256SUMS-linux.txt
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
@@ -95,8 +95,8 @@ jobs:
         run: |
           Get-FileHash inputsync.exe -Algorithm SHA256 | `
             ForEach-Object { "$($_.Hash)  inputsync.exe" } | `
-            Out-File -FilePath "SHA256SUMS.txt"
-          Get-Content SHA256SUMS.txt
+            Out-File -FilePath "SHA256SUMS-windows.txt"
+          Get-Content SHA256SUMS-windows.txt
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -104,7 +104,7 @@ jobs:
           name: windows-exe
           path: |
             src-tauri/target/release/inputsync.exe
-            src-tauri/target/release/SHA256SUMS.txt
+            src-tauri/target/release/SHA256SUMS-windows.txt
           if-no-files-found: error
 
   # ── GitHub Release ─────────────────────────────────────────────────────────────
@@ -147,9 +147,9 @@ jobs:
           prerelease: false
           files: |
             release-assets/linux/inputsync
-            release-assets/linux/SHA256SUMS.txt
+            release-assets/linux/SHA256SUMS-linux.txt
             release-assets/windows/inputsync.exe
-            release-assets/windows/SHA256SUMS.txt
+            release-assets/windows/SHA256SUMS-windows.txt
           body: |
             ## InputSync ${{ github.ref_name }}
 
