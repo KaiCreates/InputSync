@@ -14,6 +14,7 @@ export interface AppStatus {
   client_count: number;
   capturing: boolean;
   latency_ms: number | null;
+  error: string | null;
 }
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
     client_count: 0,
     capturing: false,
     latency_ms: null,
+    error: null,
   });
 
   const refreshStatus = async () => {

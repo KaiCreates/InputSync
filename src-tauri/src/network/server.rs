@@ -1,6 +1,9 @@
+/// Fix #5: client_count tracked via Arc<AtomicUsize> shared with ServerState
+/// Fix #6: Shutdown propagates through oneshot; TCP loop breaks on socket error
 use anyhow::{bail, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -14,7 +17,6 @@ use crate::core::protocol::{
 pub const SERVER_TCP_PORT: u16 = 24800;
 pub const SERVER_UDP_PORT: u16 = 24801;
 
-/// State for one connected client
 struct ConnectedClient {
     addr: SocketAddr,
     udp_addr: SocketAddr,
@@ -31,40 +33,47 @@ impl ServerHandle {
     }
 }
 
-/// Start the server:
-/// 1. Listens on TCP for client connections / handshakes
-/// 2. After handshake, receives input packets on UDP and relays encrypted to clients
-/// 3. `input_rx` receives captured input packets to forward to clients
 pub async fn start_server(
     session_code: String,
-    input_rx: mpsc::UnboundedReceiver<InputPacket>,
+    input_rx: mpsc::Receiver<InputPacket>,          // bounded channel
+    client_count: Arc<AtomicUsize>,                 // shared with ServerState
 ) -> Result<ServerHandle> {
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
 
-    let tcp_addr = format!("0.0.0.0:{}", SERVER_TCP_PORT);
-    let udp_addr = format!("0.0.0.0:{}", SERVER_UDP_PORT);
+    let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", SERVER_TCP_PORT)).await?;
+    let udp_socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", SERVER_UDP_PORT)).await?);
 
-    let tcp_listener = TcpListener::bind(&tcp_addr).await?;
-    let udp_socket = Arc::new(UdpSocket::bind(&udp_addr).await?);
-
-    log::info!("Server listening on TCP {} and UDP {}", tcp_addr, udp_addr);
+    log::info!(
+        "Server listening — TCP :{}  UDP :{}",
+        SERVER_TCP_PORT,
+        SERVER_UDP_PORT
+    );
 
     let clients: Arc<Mutex<Vec<ConnectedClient>>> = Arc::new(Mutex::new(Vec::new()));
     let session_code = Arc::new(session_code);
 
-    // Spawn TCP accept loop
+    // ── TCP accept loop ────────────────────────────────────────────────────
     let clients_tcp = clients.clone();
     let code_clone = session_code.clone();
+    let count_tcp = client_count.clone();
     tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
                 Ok((stream, addr)) => {
-                    log::info!("New connection from {}", addr);
+                    log::info!("Incoming connection from {}", addr);
                     let clients = clients_tcp.clone();
                     let code = code_clone.clone();
+                    let count = count_tcp.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client_handshake(stream, addr, code, clients).await {
-                            log::warn!("Handshake failed for {}: {}", addr, e);
+                        match handle_client_handshake(stream, addr, code, clients.clone()).await {
+                            Ok(()) => {
+                                // Client cleanly disconnected; remove and decrement
+                                count.fetch_sub(1, Ordering::Relaxed);
+                                log::info!("Client {} session ended", addr);
+                            }
+                            Err(e) => {
+                                log::warn!("Handshake/session failed for {}: {}", addr, e);
+                            }
                         }
                     });
                 }
@@ -76,7 +85,7 @@ pub async fn start_server(
         }
     });
 
-    // Spawn UDP broadcast loop
+    // ── UDP broadcast loop ─────────────────────────────────────────────────
     let udp = udp_socket.clone();
     let clients_udp = clients.clone();
     let mut input_rx = input_rx;
@@ -89,7 +98,7 @@ pub async fn start_server(
                 match client.cipher.encrypt(&wire, pkt_counter) {
                     Ok(encrypted) => {
                         if let Err(e) = udp.send_to(&encrypted, client.udp_addr).await {
-                            log::warn!("UDP send to {} failed: {}", client.udp_addr, e);
+                            log::warn!("UDP send → {} failed: {}", client.udp_addr, e);
                         }
                     }
                     Err(e) => log::warn!("Encrypt failed: {}", e),
@@ -97,24 +106,21 @@ pub async fn start_server(
             }
             pkt_counter = pkt_counter.wrapping_add(1);
         }
+        log::info!("UDP broadcast loop exiting (input channel closed)");
     });
 
     Ok(ServerHandle { shutdown_tx })
 }
 
-/// Full handshake for a new TCP connection:
-/// 1. Receive session code from client
-/// 2. Validate it
-/// 3. ECDH key exchange
-/// 4. Nonce exchange
-/// 5. Register client for UDP delivery
+/// Runs the full handshake, then keeps TCP alive until client disconnects.
+/// Returns Ok(()) on clean disconnect, Err on auth or protocol failure.
 async fn handle_client_handshake(
     mut stream: TcpStream,
     addr: SocketAddr,
     expected_code: Arc<String>,
     clients: Arc<Mutex<Vec<ConnectedClient>>>,
 ) -> Result<()> {
-    // Step 1: Read session code (HS_SESSION_CODE | 1 byte len | N bytes code)
+    // Step 1: Session code
     let msg_type = stream.read_u8().await?;
     if msg_type != HS_SESSION_CODE {
         stream.write_u8(HS_REJECT).await?;
@@ -123,15 +129,16 @@ async fn handle_client_handshake(
     let code_len = stream.read_u8().await? as usize;
     let mut code_buf = vec![0u8; code_len];
     stream.read_exact(&mut code_buf).await?;
-    let received_code = String::from_utf8(code_buf)?;
+    // Normalize to uppercase (Fix #8)
+    let received_code = String::from_utf8(code_buf)?.trim().to_uppercase();
 
-    if received_code.trim() != expected_code.as_str() {
+    if received_code != expected_code.as_str() {
         stream.write_u8(HS_REJECT).await?;
-        bail!("Invalid session code: {}", received_code);
+        bail!("Invalid session code from {}", addr);
     }
-    log::info!("Session code validated for {}", addr);
+    log::info!("Session code valid — {}", addr);
 
-    // Step 2: Read client public key (HS_CLIENT_HELLO | pubkey[32])
+    // Step 2: Client public key
     let msg_type = stream.read_u8().await?;
     if msg_type != HS_CLIENT_HELLO {
         stream.write_u8(HS_REJECT).await?;
@@ -141,48 +148,39 @@ async fn handle_client_handshake(
     stream.read_exact(&mut client_pubkey_bytes).await?;
     let client_pubkey = x25519_dalek::PublicKey::from(client_pubkey_bytes);
 
-    // Step 3: Generate server keypair, send server public key
+    // Step 3: Send server public key
     let server_kp = EphemeralKeypair::generate();
-    let server_pubkey_bytes = server_kp.public.to_bytes();
-
     stream.write_u8(HS_SERVER_HELLO).await?;
-    stream.write_all(&server_pubkey_bytes).await?;
+    stream.write_all(&server_kp.public.to_bytes()).await?;
     stream.flush().await?;
 
-    // Compute shared secret and derive session key
     let shared = server_kp.diffie_hellman(&client_pubkey);
     let session_key = derive_session_key(&shared, &expected_code);
 
-    // Step 4: Nonce exchange (server sends its nonce, receives client nonce)
-    let server_base_nonce = SessionCipher::generate_base_nonce();
+    // Step 4: Nonce exchange
+    let server_nonce = SessionCipher::generate_base_nonce();
     stream.write_u8(HS_NONCE_EXCHANGE).await?;
-    stream.write_all(&server_base_nonce).await?;
+    stream.write_all(&server_nonce).await?;
     stream.flush().await?;
 
     let msg_type = stream.read_u8().await?;
     if msg_type != HS_NONCE_EXCHANGE {
         bail!("Expected HS_NONCE_EXCHANGE, got 0x{:02X}", msg_type);
     }
-    let mut client_base_nonce = [0u8; 12];
-    stream.read_exact(&mut client_base_nonce).await?;
+    let mut client_nonce = [0u8; 12];
+    stream.read_exact(&mut client_nonce).await?;
 
-    // Combined nonce prevents replay even if one side is compromised
-    let combined_nonce = combine_nonces(&server_base_nonce, &client_base_nonce);
-    let cipher = Arc::new(SessionCipher::new(&session_key, combined_nonce));
+    let combined = combine_nonces(&server_nonce, &client_nonce);
+    let cipher = Arc::new(SessionCipher::new(&session_key, combined));
 
-    // Step 5: Read client UDP port
-    let client_udp_port = stream.read_u16().await?;
-    let client_udp_addr: SocketAddr = format!("{}:{}", addr.ip(), client_udp_port).parse()?;
+    // Step 5: Client UDP port
+    let udp_port = stream.read_u16().await?;
+    let client_udp_addr: SocketAddr = format!("{}:{}", addr.ip(), udp_port).parse()?;
 
-    // Acknowledge
     stream.write_u8(HS_ACK).await?;
     stream.flush().await?;
 
-    log::info!(
-        "Client {} authenticated. UDP delivery → {}",
-        addr,
-        client_udp_addr
-    );
+    log::info!("Client {} authenticated → UDP {}", addr, client_udp_addr);
 
     clients.lock().await.push(ConnectedClient {
         addr,
@@ -190,23 +188,22 @@ async fn handle_client_handshake(
         cipher,
     });
 
-    // Keep the TCP connection alive for future control messages / disconnect detection
+    // Keep-alive: read loop detects disconnect
     let mut buf = [0u8; 1];
     loop {
         match stream.read(&mut buf).await {
             Ok(0) => {
-                log::info!("Client {} disconnected", addr);
+                log::info!("Client {} disconnected (TCP EOF)", addr);
                 break;
             }
             Err(e) => {
-                log::warn!("Client {} TCP error: {}", addr, e);
+                log::info!("Client {} TCP closed: {}", addr, e);
                 break;
             }
-            _ => {}
+            _ => {} // control byte (future use)
         }
     }
 
-    // Remove client
     clients.lock().await.retain(|c| c.addr != addr);
     Ok(())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "inputsync"
-version = "0.1.0"
+version = "1.0.0"
 description = "InputSync - Software KVM Switch"
 authors = ["InputSync"]
 edition = "2021"
@@ -58,8 +58,8 @@ windows = { version = "0.58", features = [
 opt-level = 3
 lto = true
 codegen-units = 1
-strip = true
-panic = "abort"
+strip = false   # keep symbols for crash reports (Fix #12)
+panic = "unwind"
 
 [profile.dev]
 opt-level = 1

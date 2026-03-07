@@ -14,10 +14,17 @@ pub fn generate_session_code() -> String {
         .collect()
 }
 
-/// Validate that a session code matches the expected format
+/// Normalize a user-entered code to canonical form (Fix #8)
+pub fn normalize_code(code: &str) -> String {
+    code.trim().to_uppercase()
+}
+
+/// Validate that a session code matches the expected format.
+/// Accepts both upper and lower case — use normalize_code() before comparing.
 pub fn validate_code_format(code: &str) -> bool {
-    code.len() == CODE_LENGTH
-        && code
+    let upper = code.trim().to_uppercase();
+    upper.len() == CODE_LENGTH
+        && upper
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
