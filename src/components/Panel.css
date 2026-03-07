@@ -145,13 +145,14 @@
   font-weight: 500;
 }
 
-.code-input {
+input.code-input {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 6px;
   text-align: center;
   text-transform: uppercase;
+  padding: 12px 14px;
 }
 
 .connected-info {

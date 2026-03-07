@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import ServerPanel from "./components/ServerPanel";
 import ClientPanel from "./components/ClientPanel";
 import StatusBar from "./components/StatusBar";
+import PixelLogo from "./components/PixelLogo";
 import "./App.css";
 
 export interface AppStatus {
@@ -45,11 +46,7 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="logo">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <rect x="2" y="6" width="8" height="12" rx="2" fill="var(--accent)" opacity="0.9"/>
-            <rect x="14" y="6" width="8" height="12" rx="2" fill="var(--accent)" opacity="0.5"/>
-            <path d="M10 12h4M12 10l2 2-2 2" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round"/>
-          </svg>
+          <PixelLogo size={42} />
           <span>InputSync</span>
         </div>
         <div className="header-status">
