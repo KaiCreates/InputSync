@@ -40,6 +40,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Windows installer no longer appears frozen during WebView2 download: an NSIS hook now detects whether WebView2 is present and, if not, shows a dialog before the download begins explaining that the installer is running normally. Systems where WebView2 is already installed (most Windows 10/11) skip this step silently.
+- Windows app no longer silently fails to open when WebView2 is missing or damaged: replaced the silent panic with a native Windows MessageBoxW error dialog that displays the exact fix steps and a direct WebView2 download link. (commit d6d70dd)
+
 ### Planned — v1.1
 - Clipboard sync across machines
 - Linux Wayland support (libei)
