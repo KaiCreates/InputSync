@@ -1,0 +1,60 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 20px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-idle {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.dot-server {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(108, 99, 255, 0.6);
+  animation: pulse-accent 2s ease-in-out infinite;
+}
+
+.dot-client {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(62, 207, 142, 0.6);
+  animation: pulse-success 2s ease-in-out infinite;
+}
+
+@keyframes pulse-accent {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(108, 99, 255, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(108, 99, 255, 0); }
+}
+
+@keyframes pulse-success {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(62, 207, 142, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(62, 207, 142, 0); }
+}
+
+.status-text {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.status-version {
+  font-size: 11px;
+  color: var(--border);
+  letter-spacing: 0.5px;
+}
