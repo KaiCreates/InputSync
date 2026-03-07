@@ -1,23 +1,18 @@
-/// Fix #1: InputSimulator runs on a dedicated std::thread (enigo requires non-tokio context)
-/// Fix #4: Counter window resync — try up to COUNTER_WINDOW ahead before failing
-/// Fix #13: Errors propagated back via status_tx channel
 use anyhow::{bail, Result};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::core::crypto::{combine_nonces, derive_session_key, EphemeralKeypair, SessionCipher};
 use crate::core::protocol::{
-    PacketHeader, HS_ACK, HS_CLIENT_HELLO, HS_NONCE_EXCHANGE, HS_REJECT,
-    HS_SERVER_HELLO, HS_SESSION_CODE,
+    PacketHeader, HS_ACK, HS_CLIENT_HELLO, HS_NONCE_EXCHANGE, HS_REJECT, HS_SERVER_HELLO,
+    HS_SESSION_CODE,
 };
 use crate::input::simulation::InputSimulator;
 
 pub const CLIENT_UDP_PORT: u16 = 24802;
-
-/// Max packets to look ahead when counter drifts due to drops
 const COUNTER_WINDOW: u64 = 64;
 
 pub struct ClientHandle {
@@ -34,13 +29,31 @@ pub async fn connect_to_server(
     server_host: &str,
     session_code: &str,
     status_tx: mpsc::UnboundedSender<String>,
+    tls_connector: Option<tokio_rustls::TlsConnector>,
 ) -> Result<ClientHandle> {
     let server_tcp_addr = format!("{}:24800", server_host);
-    let mut stream = TcpStream::connect(&server_tcp_addr).await?;
-    log::info!("TCP connected to {}", server_tcp_addr);
+    let tcp_stream = TcpStream::connect(&server_tcp_addr).await?;
+    tracing::info!("TCP connected to {}", server_tcp_addr);
 
-    // ── Handshake ──────────────────────────────────────────────────────────
+    if let Some(connector) = tls_connector {
+        let server_name = rustls::pki_types::ServerName::try_from(server_host.to_string())
+            .unwrap_or_else(|_| rustls::pki_types::ServerName::try_from("InputSync").unwrap());
+        let tls_stream = connector.connect(server_name, tcp_stream).await?;
+        tracing::info!("TLS handshake complete");
+        do_handshake_and_run(tls_stream, session_code, status_tx).await
+    } else {
+        do_handshake_and_run(tcp_stream, session_code, status_tx).await
+    }
+}
 
+async fn do_handshake_and_run<S>(
+    mut stream: S,
+    session_code: &str,
+    status_tx: mpsc::UnboundedSender<String>,
+) -> Result<ClientHandle>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     // Step 1: Send session code
     let code_bytes = session_code.as_bytes();
     stream.write_u8(HS_SESSION_CODE).await?;
@@ -93,16 +106,14 @@ pub async fn connect_to_server(
         bail!("Server did not acknowledge: 0x{:02X}", ack);
     }
 
-    log::info!("Handshake complete — session established.");
+    tracing::info!("Handshake complete — session established.");
     let _ = status_tx.send("connected".to_string());
 
-    // ── UDP receive socket ─────────────────────────────────────────────────
+    // ── UDP receive socket ───────────────────────────────────────────────
     let udp_socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", CLIENT_UDP_PORT)).await?);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
-    // ── Simulator thread (Fix #1) ──────────────────────────────────────────
-    // enigo requires a non-tokio OS thread. We send decoded plain packets via
-    // a sync channel; the simulator thread blocks on recv() and dispatches.
+    // ── Simulator thread ─────────────────────────────────────────────────
     let (sim_tx, sim_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let status_sim = status_tx.clone();
     std::thread::Builder::new()
@@ -111,14 +122,13 @@ pub async fn connect_to_server(
             let mut simulator = match InputSimulator::new() {
                 Ok(s) => s,
                 Err(e) => {
-                    log::error!("InputSimulator init failed: {}", e);
+                    tracing::error!("InputSimulator init failed: {}", e);
                     let _ = status_sim.send(format!("simulator_error: {}", e));
                     return;
                 }
             };
-            log::info!("Input simulator thread ready");
+            tracing::info!("Input simulator thread ready");
 
-            // Block waiting for plaintext packets from the UDP receiver task
             while let Ok(plain) = sim_rx.recv() {
                 if plain.len() < 12 {
                     continue;
@@ -126,15 +136,15 @@ pub async fn connect_to_server(
                 if let Ok(header) = PacketHeader::from_bytes(&plain) {
                     let payload = &plain[12..];
                     if let Err(e) = simulator.dispatch(&header, payload) {
-                        log::debug!("Simulation dispatch: {}", e);
+                        tracing::debug!("Simulation dispatch: {}", e);
                     }
                 }
             }
-            log::info!("Input simulator thread exiting");
+            tracing::info!("Input simulator thread exiting");
         })
         .expect("Failed to spawn simulator thread");
 
-    // ── UDP receive task with counter-window resync (Fix #4) ───────────────
+    // ── UDP receive task ─────────────────────────────────────────────────
     let cipher_udp = cipher.clone();
     let status_clone = status_tx.clone();
     let counter = Arc::new(AtomicU64::new(0));
@@ -145,7 +155,7 @@ pub async fn connect_to_server(
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
-                    log::info!("Client UDP loop: shutdown signal");
+                    tracing::info!("Client UDP loop: shutdown signal");
                     break;
                 }
                 result = udp_socket.recv_from(&mut buf) => {
@@ -154,8 +164,6 @@ pub async fn connect_to_server(
                             let encrypted = &buf[..len];
                             let current = counter.load(Ordering::Relaxed);
 
-                            // Try current counter first, then look forward up to COUNTER_WINDOW.
-                            // Forward-only window preserves replay protection.
                             let mut decrypted: Option<(Vec<u8>, u64)> = None;
                             for delta in 0..=COUNTER_WINDOW {
                                 if let Ok(plain) = cipher_udp.decrypt(encrypted, current + delta) {
@@ -166,10 +174,9 @@ pub async fn connect_to_server(
 
                             match decrypted {
                                 Some((plain, matched)) => {
-                                    // Advance counter past the matched position
                                     counter.store(matched + 1, Ordering::Relaxed);
-                                    if delta_skipped(matched, current) > 0 {
-                                        log::debug!(
+                                    if matched > current {
+                                        tracing::debug!(
                                             "Counter resync: skipped {} dropped packets",
                                             matched - current
                                         );
@@ -177,7 +184,7 @@ pub async fn connect_to_server(
                                     let _ = sim_tx.send(plain);
                                 }
                                 None => {
-                                    log::warn!(
+                                    tracing::warn!(
                                         "Decrypt failed for counter window [{}, {}] — dropping",
                                         current,
                                         current + COUNTER_WINDOW
@@ -186,7 +193,7 @@ pub async fn connect_to_server(
                             }
                         }
                         Err(e) => {
-                            log::warn!("UDP recv error: {}", e);
+                            tracing::warn!("UDP recv error: {}", e);
                             break;
                         }
                     }
@@ -194,14 +201,8 @@ pub async fn connect_to_server(
             }
         }
 
-        // sim_tx dropped here → simulator thread exits its recv() loop cleanly
         let _ = status_clone.send("disconnected".to_string());
     });
 
     Ok(ClientHandle { shutdown_tx })
-}
-
-#[inline]
-fn delta_skipped(matched: u64, current: u64) -> u64 {
-    matched.saturating_sub(current)
 }

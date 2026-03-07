@@ -1,23 +1,27 @@
-/// Fix #5: client_count tracked via Arc<AtomicUsize> shared with ServerState
-/// Fix #6: Shutdown via CancellationToken — TCP accept loop cancels cleanly,
-///         releasing the port so a new server can bind immediately after stop.
 use anyhow::{bail, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::crypto::{combine_nonces, derive_session_key, EphemeralKeypair, SessionCipher};
 use crate::core::protocol::{
-    HS_ACK, HS_CLIENT_HELLO, HS_NONCE_EXCHANGE, HS_REJECT, HS_SERVER_HELLO,
-    HS_SESSION_CODE, InputPacket,
+    HS_ACK, HS_CLIENT_HELLO, HS_NONCE_EXCHANGE, HS_REJECT, HS_SERVER_HELLO, HS_SESSION_CODE,
+    InputPacket,
 };
 
-pub const SERVER_TCP_PORT: u16 = 24800;
-pub const SERVER_UDP_PORT: u16 = 24801;
+pub struct ServerHandle {
+    cancel: CancellationToken,
+}
+
+impl ServerHandle {
+    pub fn shutdown(self) {
+        self.cancel.cancel();
+    }
+}
 
 struct ConnectedClient {
     addr: SocketAddr,
@@ -25,73 +29,77 @@ struct ConnectedClient {
     cipher: Arc<SessionCipher>,
 }
 
-pub struct ServerHandle {
-    cancel: CancellationToken,
-}
-
-impl ServerHandle {
-    /// Cancel all server tasks. The TCP listener is dropped immediately,
-    /// releasing port 24800 so a new server can bind right away.
-    pub fn shutdown(self) {
-        self.cancel.cancel();
-    }
-}
-
 pub async fn start_server(
     session_code: String,
-    input_rx: mpsc::Receiver<InputPacket>,          // bounded channel
-    client_count: Arc<AtomicUsize>,                 // shared with ServerState
+    input_rx: mpsc::Receiver<InputPacket>,
+    client_count: Arc<AtomicUsize>,
+    control_port: u16,
+    udp_port: u16,
+    tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
 ) -> Result<ServerHandle> {
     let cancel = CancellationToken::new();
 
-    let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", SERVER_TCP_PORT)).await?;
-    let udp_socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", SERVER_UDP_PORT)).await?);
+    let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", control_port)).await?;
+    let udp_socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", udp_port)).await?);
 
-    log::info!(
+    tracing::info!(
         "Server listening — TCP :{}  UDP :{}",
-        SERVER_TCP_PORT,
-        SERVER_UDP_PORT
+        control_port,
+        udp_port
     );
 
     let clients: Arc<Mutex<Vec<ConnectedClient>>> = Arc::new(Mutex::new(Vec::new()));
     let session_code = Arc::new(session_code);
+    let tls_acceptor = tls_acceptor.map(Arc::new);
 
-    // ── TCP accept loop ────────────────────────────────────────────────────
-    // When cancel fires, the loop breaks and tcp_listener is dropped here,
-    // immediately releasing port 24800 for a new server start.
+    // ── TCP accept loop ──────────────────────────────────────────────────
     let clients_tcp = clients.clone();
     let code_clone = session_code.clone();
     let count_tcp = client_count.clone();
     let cancel_tcp = cancel.clone();
+    let tls_clone = tls_acceptor.clone();
+
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 biased;
                 _ = cancel_tcp.cancelled() => {
-                    log::info!("TCP accept loop stopped, port {} released", SERVER_TCP_PORT);
+                    tracing::info!("TCP accept loop stopped, port {} released", control_port);
                     break;
                 }
                 result = tcp_listener.accept() => {
                     match result {
                         Ok((stream, addr)) => {
-                            log::info!("Incoming connection from {}", addr);
+                            tracing::info!("Incoming connection from {}", addr);
                             let clients = clients_tcp.clone();
                             let code = code_clone.clone();
                             let count = count_tcp.clone();
+                            let tls = tls_clone.clone();
                             tokio::spawn(async move {
-                                match handle_client_handshake(stream, addr, code, clients.clone()).await {
+                                let result = if let Some(acceptor) = tls {
+                                    match acceptor.accept(stream).await {
+                                        Ok(tls_stream) => {
+                                            handle_client_handshake(tls_stream, addr, code, clients.clone()).await
+                                        }
+                                        Err(e) => Err(anyhow::anyhow!("TLS accept failed: {}", e)),
+                                    }
+                                } else {
+                                    handle_client_handshake(stream, addr, code, clients.clone()).await
+                                };
+
+                                match result {
                                     Ok(()) => {
                                         count.fetch_sub(1, Ordering::Relaxed);
-                                        log::info!("Client {} session ended", addr);
+                                        tracing::info!("Client {} session ended", addr);
                                     }
                                     Err(e) => {
-                                        log::warn!("Handshake/session failed for {}: {}", addr, e);
+                                        tracing::warn!("Handshake/session failed for {}: {}", addr, e);
                                     }
                                 }
                             });
                         }
                         Err(e) => {
-                            log::error!("TCP accept error: {}", e);
+                            tracing::error!("TCP accept error: {}", e);
                             break;
                         }
                     }
@@ -100,8 +108,7 @@ pub async fn start_server(
         }
     });
 
-    // ── UDP broadcast loop ─────────────────────────────────────────────────
-    // Stops naturally when input_tx (held by ServerState) is dropped.
+    // ── UDP broadcast loop ───────────────────────────────────────────────
     let udp = udp_socket.clone();
     let clients_udp = clients.clone();
     let mut input_rx = input_rx;
@@ -114,28 +121,29 @@ pub async fn start_server(
                 match client.cipher.encrypt(&wire, pkt_counter) {
                     Ok(encrypted) => {
                         if let Err(e) = udp.send_to(&encrypted, client.udp_addr).await {
-                            log::warn!("UDP send → {} failed: {}", client.udp_addr, e);
+                            tracing::warn!("UDP send → {} failed: {}", client.udp_addr, e);
                         }
                     }
-                    Err(e) => log::warn!("Encrypt failed: {}", e),
+                    Err(e) => tracing::warn!("Encrypt failed: {}", e),
                 }
             }
             pkt_counter = pkt_counter.wrapping_add(1);
         }
-        log::info!("UDP broadcast loop exiting (input channel closed)");
+        tracing::info!("UDP broadcast loop exiting (input channel closed)");
     });
 
     Ok(ServerHandle { cancel })
 }
 
-/// Runs the full handshake, then keeps TCP alive until client disconnects.
-/// Returns Ok(()) on clean disconnect, Err on auth or protocol failure.
-async fn handle_client_handshake(
-    mut stream: TcpStream,
+async fn handle_client_handshake<S>(
+    mut stream: S,
     addr: SocketAddr,
     expected_code: Arc<String>,
     clients: Arc<Mutex<Vec<ConnectedClient>>>,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // Step 1: Session code
     let msg_type = stream.read_u8().await?;
     if msg_type != HS_SESSION_CODE {
@@ -145,14 +153,13 @@ async fn handle_client_handshake(
     let code_len = stream.read_u8().await? as usize;
     let mut code_buf = vec![0u8; code_len];
     stream.read_exact(&mut code_buf).await?;
-    // Normalize to uppercase (Fix #8)
     let received_code = String::from_utf8(code_buf)?.trim().to_uppercase();
 
     if received_code != expected_code.as_str() {
         stream.write_u8(HS_REJECT).await?;
         bail!("Invalid session code from {}", addr);
     }
-    log::info!("Session code valid — {}", addr);
+    tracing::info!("Session code valid — {}", addr);
 
     // Step 2: Client public key
     let msg_type = stream.read_u8().await?;
@@ -196,7 +203,7 @@ async fn handle_client_handshake(
     stream.write_u8(HS_ACK).await?;
     stream.flush().await?;
 
-    log::info!("Client {} authenticated → UDP {}", addr, client_udp_addr);
+    tracing::info!("Client {} authenticated → UDP {}", addr, client_udp_addr);
 
     clients.lock().await.push(ConnectedClient {
         addr,
@@ -209,14 +216,14 @@ async fn handle_client_handshake(
     loop {
         match stream.read(&mut buf).await {
             Ok(0) => {
-                log::info!("Client {} disconnected (TCP EOF)", addr);
+                tracing::info!("Client {} disconnected (TCP EOF)", addr);
                 break;
             }
             Err(e) => {
-                log::info!("Client {} TCP closed: {}", addr, e);
+                tracing::info!("Client {} TCP closed: {}", addr, e);
                 break;
             }
-            _ => {} // control byte (future use)
+            _ => {}
         }
     }
 

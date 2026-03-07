@@ -1,12 +1,10 @@
-/// Fix #2: Relative mouse movement — tracks last position, sends deltas
-/// Fix #3: ScrollLock toggles forwarding (switch mechanism)
-/// Fix #7: Bounded channel with try_send — drops packets rather than OOM
 use anyhow::Result;
 use rdev::{Button as RdevButton, Event, EventType, Key as RdevKey};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
 use crate::core::protocol::{InputPacket, KeyCode};
+use crate::state::ServerConfig;
 
 fn rdev_key_to_keycode(key: RdevKey) -> u16 {
     use RdevKey::*;
@@ -56,9 +54,6 @@ fn rdev_button_to_code(button: RdevButton) -> u8 {
     }
 }
 
-/// Dropping this handle signals the capture thread to stop forwarding.
-/// The rdev::listen thread itself cannot be cleanly killed, but it will
-/// stop forwarding events and block until the process exits.
 pub struct CaptureHandle {
     stop_tx: mpsc::SyncSender<()>,
 }
@@ -75,40 +70,104 @@ impl Drop for CaptureHandle {
     }
 }
 
-/// Start capturing input events.
-///
-/// - `event_tx`: bounded channel; packets are dropped if the consumer is slow (Fix #7)
-/// - `forwarding`: AtomicBool controlled externally; when false events are captured
-///   but not forwarded. ScrollLock toggles this flag (Fix #3).
+/// Detect primary screen size; returns (width, height).
+/// Falls back to a large default if detection fails.
+fn get_screen_size() -> (u32, u32) {
+    // rdev::display_size() returns (width, height) on Linux/macOS/Windows
+    match rdev::display_size() {
+        Ok((w, h)) => (w as u32, h as u32),
+        Err(_) => (1920, 1080),
+    }
+}
+
+fn is_dead_corner(
+    x: f64,
+    y: f64,
+    sw: u32,
+    sh: u32,
+    corners: &crate::state::DeadCorners,
+) -> bool {
+    let cs = corners.size_px as f64;
+    if corners.top_left     && x < cs              && y < cs              { return true; }
+    if corners.top_right    && x > (sw as f64 - cs) && y < cs              { return true; }
+    if corners.bottom_left  && x < cs              && y > (sh as f64 - cs) { return true; }
+    if corners.bottom_right && x > (sw as f64 - cs) && y > (sh as f64 - cs) { return true; }
+    false
+}
+
+fn is_in_dead_zone(x: f64, y: f64, sw: u32, sh: u32, zones: &[crate::state::DeadZone]) -> bool {
+    let (fw, fh) = (sw as f64, sh as f64);
+    for dz in zones {
+        let zx = dz.x_frac as f64 * fw;
+        let zy = dz.y_frac as f64 * fh;
+        let zw = dz.w_frac as f64 * fw;
+        let zh = dz.h_frac as f64 * fh;
+        if x >= zx && x <= zx + zw && y >= zy && y <= zy + zh {
+            return true;
+        }
+    }
+    false
+}
+
+fn check_edge_trigger(
+    x: f64,
+    y: f64,
+    config: &ServerConfig,
+    screen: (u32, u32),
+    forwarding: &AtomicBool,
+) {
+    let (sw, sh) = screen;
+    let px = config.edge_triggers.trigger_px as f64;
+
+    if is_dead_corner(x, y, sw, sh, &config.dead_corners) {
+        return;
+    }
+    if is_in_dead_zone(x, y, sw, sh, &config.dead_zones) {
+        return;
+    }
+
+    let triggers = &config.edge_triggers;
+    if triggers.left   && x <= px                    { forwarding.store(true, Ordering::Relaxed); }
+    if triggers.right  && x >= (sw as f64 - px)      { forwarding.store(true, Ordering::Relaxed); }
+    if triggers.top    && y <= px                    { forwarding.store(true, Ordering::Relaxed); }
+    if triggers.bottom && y >= (sh as f64 - px)      { forwarding.store(true, Ordering::Relaxed); }
+}
+
 pub fn start_capture(
     event_tx: tokio::sync::mpsc::Sender<InputPacket>,
     forwarding: Arc<AtomicBool>,
+    config: ServerConfig,
 ) -> Result<CaptureHandle> {
     let (stop_tx, stop_rx) = mpsc::sync_channel::<()>(1);
 
     std::thread::Builder::new()
         .name("inputsync-capture".into())
         .spawn(move || {
-            // Per-iteration state — lives inside the closure, no Arc needed
+            let screen_size = get_screen_size();
+            tracing::info!("Capture thread: screen size {:?}", screen_size);
+
             let mut last_x: f64 = 0.0;
             let mut last_y: f64 = 0.0;
             let mut first_move = true;
             let mut local_seq: u32 = 0;
 
             let callback = move |event: Event| {
-                // Check stop signal (non-blocking)
                 if stop_rx.try_recv().is_ok() {
                     return;
                 }
 
-                // Fix #3 — ScrollLock press toggles forwarding on the server
+                // ScrollLock toggles forwarding off (return to server)
                 if matches!(&event.event_type, EventType::KeyPress(RdevKey::ScrollLock)) {
                     let was = forwarding.fetch_xor(true, Ordering::Relaxed);
-                    log::info!("Input forwarding toggled via ScrollLock → {}", !was);
+                    tracing::info!("Input forwarding toggled via ScrollLock → {}", !was);
                     return;
                 }
 
-                // Don't forward if capture is paused
+                // Check edge triggers on every mouse move (even when not forwarding)
+                if let EventType::MouseMove { x, y } = &event.event_type {
+                    check_edge_trigger(*x, *y, &config, screen_size, &forwarding);
+                }
+
                 if !forwarding.load(Ordering::Relaxed) {
                     return;
                 }
@@ -116,7 +175,6 @@ pub fn start_capture(
                 local_seq = local_seq.wrapping_add(1);
 
                 let packet: Option<InputPacket> = match &event.event_type {
-                    // Fix #2 — Relative mouse movement
                     EventType::MouseMove { x, y } => {
                         if first_move {
                             last_x = *x;
@@ -176,15 +234,14 @@ pub fn start_capture(
                 };
 
                 if let Some(pkt) = packet {
-                    // Fix #7 — Non-blocking try_send; drop on full buffer (backpressure)
                     if event_tx.try_send(pkt).is_err() {
-                        log::trace!("Input queue full — packet dropped");
+                        tracing::trace!("Input queue full — packet dropped");
                     }
                 }
             };
 
             if let Err(e) = rdev::listen(callback) {
-                log::error!("rdev capture error: {:?}", e);
+                tracing::error!("rdev capture error: {:?}", e);
             }
         })
         .expect("Failed to spawn capture thread");

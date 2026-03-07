@@ -16,9 +16,9 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── Linux .deb ──────────────────────────────────────────────────────────────
+  # ── Linux binary ─────────────────────────────────────────────────────────────
   build-linux:
-    name: Linux x86_64 (.deb)
+    name: Linux x86_64 (native binary)
     runs-on: ubuntu-22.04
 
     steps:
@@ -28,12 +28,15 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libgtk-3-dev \
             libayatana-appindicator3-dev \
             libx11-dev libxtst-dev libxi-dev \
-            libxdo-dev \
+            libxdo-dev libxkbcommon-dev \
+            libwayland-dev \
+            libglib2.0-dev \
             build-essential curl wget file \
-            libssl-dev libglib2.0-dev patchelf
+            libssl-dev patchelf \
+            cmake nasm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -45,43 +48,28 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Setup Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
+      - name: Build Linux release binary
+        working-directory: src-tauri
+        run: cargo build --release
 
-      - name: Install npm deps
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-
-      - name: Build Linux .deb
-        run: cargo tauri build --bundles deb
-
-      - name: Compute checksum
+      - name: Package binary
+        working-directory: src-tauri/target/release
         run: |
-          cd src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb 2>/dev/null \
-            || cd src-tauri/target/release/bundle/deb
-          sha256sum *.deb > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          mkdir -p pkg
+          cp inputsync pkg/
+          sha256sum inputsync > pkg/SHA256SUMS.txt
+          cat pkg/SHA256SUMS.txt
 
-      - name: Upload .deb artifact
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-deb
-          path: |
-            src-tauri/target/**/bundle/deb/*.deb
-            src-tauri/target/**/bundle/deb/SHA256SUMS.txt
+          name: linux-binary
+          path: src-tauri/target/release/pkg/
           if-no-files-found: error
 
-  # ── Windows NSIS .exe ───────────────────────────────────────────────────────
+  # ── Windows binary ────────────────────────────────────────────────────────────
   build-windows:
-    name: Windows x86_64 (.exe installer)
+    name: Windows x86_64 (.exe)
     runs-on: windows-latest
 
     steps:
@@ -97,45 +85,29 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Setup Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install npm deps
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-
-      - name: Build Windows NSIS installer
-        run: cargo tauri build --bundles nsis
+      - name: Build Windows release binary
+        working-directory: src-tauri
+        run: cargo build --release
 
       - name: Compute checksum
         shell: pwsh
+        working-directory: src-tauri/target/release
         run: |
-          $path = Get-ChildItem -Recurse -Filter "*.exe" `
-            src-tauri/target/release/bundle/nsis | Select-Object -First 1
-          Get-FileHash $path.FullName -Algorithm SHA256 | `
-            Select-Object Hash,Path | Format-List
-          Get-FileHash $path.FullName -Algorithm SHA256 | `
-            ForEach-Object { "$($_.Hash)  $($_.Path)" } | `
-            Out-File -FilePath "$(Split-Path $path.FullName)/SHA256SUMS.txt"
+          Get-FileHash inputsync.exe -Algorithm SHA256 | `
+            ForEach-Object { "$($_.Hash)  inputsync.exe" } | `
+            Out-File -FilePath "SHA256SUMS.txt"
+          Get-Content SHA256SUMS.txt
 
-      - name: Upload installer artifact
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/SHA256SUMS.txt
+            src-tauri/target/release/inputsync.exe
+            src-tauri/target/release/SHA256SUMS.txt
           if-no-files-found: error
 
-  # ── GitHub Release ──────────────────────────────────────────────────────────
+  # ── GitHub Release ─────────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
     needs: [build-linux, build-windows]
@@ -153,7 +125,7 @@ jobs:
         uses: actions/download-artifact@v4
         if: needs.build-linux.result == 'success'
         with:
-          name: linux-deb
+          name: linux-binary
           path: release-assets/linux
 
       - name: Download Windows artifact
@@ -174,20 +146,16 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            release-assets/linux/**/*.deb
-            release-assets/linux/**/SHA256SUMS.txt
-            release-assets/windows/**/*.exe
-            release-assets/windows/**/SHA256SUMS.txt
+            release-assets/linux/inputsync
+            release-assets/linux/SHA256SUMS.txt
+            release-assets/windows/inputsync.exe
+            release-assets/windows/SHA256SUMS.txt
           body: |
             ## InputSync ${{ github.ref_name }}
 
             Cross-platform software KVM switch — control multiple computers with one keyboard and mouse over your local network, with end-to-end encryption.
 
-            ---
-
-            ### What's New
-
-            See [CHANGELOG.md](https://github.com/KaiCreates/InputSync/blob/main/CHANGELOG.md) for full details.
+            **No WebView2 required.** Native egui GUI — single portable binary (~9MB).
 
             ---
 
@@ -195,53 +163,39 @@ jobs:
 
             | Platform | File | Notes |
             |----------|------|-------|
-            | **Linux** (Ubuntu 22.04+, Debian 12+) | `InputSync_*_amd64.deb` | Recommended |
-            | **Windows** (10/11 x64) | `InputSync_*_x64-setup.exe` | NSIS installer |
-
-            ---
-
-            ### Installation
-
-            **Linux (.deb):**
-            ```bash
-            sudo dpkg -i InputSync_*_amd64.deb
-            # Fix any missing deps:
-            sudo apt-get install -f
-            ```
-
-            **Windows:**
-            Run `InputSync_*_x64-setup.exe` — click **More info → Run anyway** if SmartScreen appears (unsigned build).
-
-            ---
-
-            ### Verify Downloads (SHA256)
-
-            Each download folder includes a `SHA256SUMS.txt`. Verify with:
-            ```bash
-            # Linux
-            sha256sum -c SHA256SUMS.txt
-
-            # Windows (PowerShell)
-            Get-FileHash InputSync_*_x64-setup.exe -Algorithm SHA256
-            ```
+            | **Linux** (x86_64) | `inputsync` | Run directly, no install needed |
+            | **Windows** (10/11 x64) | `inputsync.exe` | Run directly, no installer needed |
 
             ---
 
             ### Quick Start
 
-            1. **Server (your keyboard/mouse machine):** Open InputSync → Start Server → note the 6-character code + IP
-            2. **Client (machine to control):** Open InputSync → Enter code + IP → Connect
-            3. **Switch control:** Press **ScrollLock** or click the Capture toggle to start/stop forwarding input
-            4. All events are encrypted end-to-end (X25519 + ChaCha20-Poly1305)
+            1. **Server (keyboard/mouse machine):** Run InputSync → Start Server → note the 6-character code + IP
+            2. **Client (machine to control):** Run InputSync → Enter code + IP → Connect
+            3. **Switch control:** Press **ScrollLock** or click Forwarding toggle
+            4. All input events are encrypted end-to-end (X25519 + ChaCha20-Poly1305)
 
             ---
 
             ### System Requirements
 
-            **Linux:** Ubuntu 22.04+ / Debian 12+ · X11 display · `libwebkit2gtk-4.1-0` · `libxtst6`
-            **Windows:** Windows 10 build 1903+ · 64-bit · WebView2 (bundled)
-            **Network:** Both machines on same LAN · TCP :24800 + UDP :24801-24802 open
+            **Linux:** `libx11`, `libxtst`, `libxdo`, `libwayland` (most distros include these)
+            **Windows:** Windows 10+ x64 — no additional runtime required
+            **Network:** TCP :24800 + UDP :24801-24802 open on server
 
             ---
 
-            *Built with Rust 🦀 + Tauri 2 + React*
+            ### Verify Downloads
+
+            ```bash
+            # Linux
+            sha256sum -c SHA256SUMS.txt
+            chmod +x inputsync && ./inputsync
+
+            # Windows (PowerShell)
+            Get-FileHash inputsync.exe -Algorithm SHA256
+            ```
+
+            ---
+
+            *Built with Rust + egui (no WebView2, no Electron)*
