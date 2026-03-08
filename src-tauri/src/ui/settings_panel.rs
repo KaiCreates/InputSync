@@ -116,10 +116,15 @@ pub fn show(
             for (i, dz) in cfg.dead_zones.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     ui.label(format!("Zone {}: ", i + 1));
-                    ui.add(egui::DragValue::new(&mut dz.x_frac).prefix("x:").speed(0.01).range(0.0..=1.0));
-                    ui.add(egui::DragValue::new(&mut dz.y_frac).prefix(" y:").speed(0.01).range(0.0..=1.0));
-                    ui.add(egui::DragValue::new(&mut dz.w_frac).prefix(" w:").speed(0.01).range(0.01..=1.0));
-                    ui.add(egui::DragValue::new(&mut dz.h_frac).prefix(" h:").speed(0.01).range(0.01..=1.0));
+                    ui.add(egui::DragValue::new(&mut dz.x_frac).prefix("x:").speed(0.01).range(0.0..=0.99));
+                    ui.add(egui::DragValue::new(&mut dz.y_frac).prefix(" y:").speed(0.01).range(0.0..=0.99));
+                    // Clamp width/height so the zone cannot extend beyond the screen edge.
+                    let max_w = (1.0_f32 - dz.x_frac).max(0.01);
+                    let max_h = (1.0_f32 - dz.y_frac).max(0.01);
+                    dz.w_frac = dz.w_frac.min(max_w);
+                    dz.h_frac = dz.h_frac.min(max_h);
+                    ui.add(egui::DragValue::new(&mut dz.w_frac).prefix(" w:").speed(0.01).range(0.01..=max_w));
+                    ui.add(egui::DragValue::new(&mut dz.h_frac).prefix(" h:").speed(0.01).range(0.01..=max_h));
                     if ui.small_button("✕").clicked() {
                         to_remove = Some(i);
                     }

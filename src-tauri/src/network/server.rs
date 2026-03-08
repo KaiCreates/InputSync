@@ -2,8 +2,9 @@ use anyhow::{bail, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -12,6 +13,9 @@ use crate::core::protocol::{
     HS_ACK, HS_CLIENT_HELLO, HS_NONCE_EXCHANGE, HS_REJECT, HS_SERVER_HELLO, HS_SESSION_CODE,
     InputPacket,
 };
+
+const MAX_CLIENTS: usize = 10;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct ServerHandle {
     cancel: CancellationToken,
@@ -71,7 +75,7 @@ pub async fn start_server(
                 biased;
                 _ = cancel_tcp.cancelled() => {
                     tracing::info!("TCP accept loop stopped, port {} released", control_port);
-                    // tcp_listener is dropped here, releasing the port immediately.
+                    // tcp_listener dropped here, releasing the port immediately.
                     break;
                 }
                 result = tcp_listener.accept() => {
@@ -83,25 +87,28 @@ pub async fn start_server(
                             let count = count_tcp.clone();
                             let tls = tls_clone.clone();
                             tokio::spawn(async move {
-                                let result = if let Some(acceptor) = tls {
-                                    match acceptor.accept(stream).await {
-                                        Ok(tls_stream) => {
-                                            handle_client_handshake(tls_stream, addr, code, clients.clone()).await
+                                let result = tokio::time::timeout(
+                                    HANDSHAKE_TIMEOUT,
+                                    async {
+                                        if let Some(acceptor) = tls {
+                                            match acceptor.accept(stream).await {
+                                                Ok(tls_stream) => {
+                                                    handle_client_handshake(
+                                                        tls_stream, addr, code, clients, count,
+                                                    ).await
+                                                }
+                                                Err(e) => Err(anyhow::anyhow!("TLS accept failed: {}", e)),
+                                            }
+                                        } else {
+                                            handle_client_handshake(stream, addr, code, clients, count).await
                                         }
-                                        Err(e) => Err(anyhow::anyhow!("TLS accept failed: {}", e)),
                                     }
-                                } else {
-                                    handle_client_handshake(stream, addr, code, clients.clone()).await
-                                };
+                                ).await;
 
                                 match result {
-                                    Ok(()) => {
-                                        count.fetch_sub(1, Ordering::Relaxed);
-                                        tracing::info!("Client {} session ended", addr);
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Handshake/session failed for {}: {}", addr, e);
-                                    }
+                                    Ok(Ok(())) => tracing::info!("Client {} session ended", addr),
+                                    Ok(Err(e)) => tracing::warn!("Session error for {}: {}", addr, e),
+                                    Err(_) => tracing::warn!("Handshake timeout for {}", addr),
                                 }
                             });
                         }
@@ -119,24 +126,49 @@ pub async fn start_server(
     let udp = udp_socket.clone();
     let clients_udp = clients.clone();
     let mut input_rx = input_rx;
+    let cancel_udp = cancel.clone();
     tokio::spawn(async move {
         let mut pkt_counter: u64 = 0;
-        while let Some(pkt) = input_rx.recv().await {
-            let wire = pkt.to_wire();
-            let locked = clients_udp.lock().await;
-            for client in locked.iter() {
-                match client.cipher.encrypt(&wire, pkt_counter) {
-                    Ok(encrypted) => {
-                        if let Err(e) = udp.send_to(&encrypted, client.udp_addr).await {
-                            tracing::warn!("UDP send → {} failed: {}", client.udp_addr, e);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_udp.cancelled() => {
+                    tracing::info!("UDP broadcast loop stopped");
+                    break;
+                }
+                maybe_pkt = input_rx.recv() => {
+                    let pkt = match maybe_pkt {
+                        Some(p) => p,
+                        None => {
+                            tracing::info!("UDP broadcast loop exiting (input channel closed)");
+                            break;
+                        }
+                    };
+
+                    let wire = pkt.to_wire();
+
+                    // Clone client data under the lock, then send without holding it.
+                    // Holding the Mutex across async UDP sends would block the TCP accept loop.
+                    let targets: Vec<(Arc<SessionCipher>, SocketAddr)> = {
+                        let locked = clients_udp.lock().await;
+                        locked.iter().map(|c| (c.cipher.clone(), c.udp_addr)).collect()
+                    };
+
+                    for (cipher, addr) in &targets {
+                        match cipher.encrypt(&wire, pkt_counter) {
+                            Ok(encrypted) => {
+                                if let Err(e) = udp.send_to(&encrypted, *addr).await {
+                                    tracing::warn!("UDP send → {} failed: {}", addr, e);
+                                }
+                            }
+                            Err(e) => tracing::warn!("Encrypt failed: {}", e),
                         }
                     }
-                    Err(e) => tracing::warn!("Encrypt failed: {}", e),
+
+                    pkt_counter = pkt_counter.wrapping_add(1);
                 }
             }
-            pkt_counter = pkt_counter.wrapping_add(1);
         }
-        tracing::info!("UDP broadcast loop exiting (input channel closed)");
     });
 
     Ok(ServerHandle { cancel, tcp_task })
@@ -147,6 +179,7 @@ async fn handle_client_handshake<S>(
     addr: SocketAddr,
     expected_code: Arc<String>,
     clients: Arc<Mutex<Vec<ConnectedClient>>>,
+    client_count: Arc<AtomicUsize>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -212,11 +245,19 @@ where
 
     tracing::info!("Client {} authenticated → UDP {}", addr, client_udp_addr);
 
-    clients.lock().await.push(ConnectedClient {
-        addr,
-        udp_addr: client_udp_addr,
-        cipher,
-    });
+    // Check client limit before accepting
+    {
+        let mut locked = clients.lock().await;
+        if locked.len() >= MAX_CLIENTS {
+            bail!("Maximum client limit ({}) reached", MAX_CLIENTS);
+        }
+        locked.push(ConnectedClient {
+            addr,
+            udp_addr: client_udp_addr,
+            cipher,
+        });
+    }
+    client_count.fetch_add(1, Ordering::Relaxed);
 
     // Keep-alive: read loop detects disconnect
     let mut buf = [0u8; 1];
@@ -234,6 +275,7 @@ where
         }
     }
 
+    client_count.fetch_sub(1, Ordering::Relaxed);
     clients.lock().await.retain(|c| c.addr != addr);
     Ok(())
 }

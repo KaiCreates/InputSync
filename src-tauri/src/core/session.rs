@@ -1,11 +1,13 @@
+use rand::rngs::OsRng;
 use rand::Rng;
 
 const CODE_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const CODE_LENGTH: usize = 6;
 
-/// Generate a cryptographically random 6-character alphanumeric session code
+/// Generate a cryptographically random 6-character alphanumeric session code.
+/// Uses OsRng (OS entropy source) — a security credential must not use thread_rng.
 pub fn generate_session_code() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = OsRng;
     (0..CODE_LENGTH)
         .map(|_| {
             let idx = rng.gen_range(0..CODE_CHARSET.len());

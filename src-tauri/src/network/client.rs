@@ -12,8 +12,10 @@ use crate::core::protocol::{
 };
 use crate::input::simulation::InputSimulator;
 
-pub const CLIENT_UDP_PORT: u16 = 24802;
 const COUNTER_WINDOW: u64 = 64;
+/// Bounded simulator channel capacity — drops old packets when the
+/// simulator thread falls behind, preventing unbounded heap growth.
+const SIM_CHANNEL_CAP: usize = 512;
 
 pub struct ClientHandle {
     shutdown_tx: oneshot::Sender<()>,
@@ -28,16 +30,28 @@ impl ClientHandle {
 pub async fn connect_to_server(
     server_host: &str,
     session_code: &str,
+    control_port: u16,
     status_tx: mpsc::UnboundedSender<String>,
     tls_connector: Option<tokio_rustls::TlsConnector>,
 ) -> Result<ClientHandle> {
-    let server_tcp_addr = format!("{}:24800", server_host);
+    let server_tcp_addr = format!("{}:{}", server_host, control_port);
     let tcp_stream = TcpStream::connect(&server_tcp_addr).await?;
     tracing::info!("TCP connected to {}", server_tcp_addr);
 
     if let Some(connector) = tls_connector {
-        let server_name = rustls::pki_types::ServerName::try_from(server_host.to_string())
-            .unwrap_or_else(|_| rustls::pki_types::ServerName::try_from("InputSync").unwrap());
+        // Handle both IP addresses and DNS hostnames.
+        // AcceptAnyCert ignores the server name for validation, but rustls
+        // still requires a syntactically valid ServerName.
+        let server_name = server_host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| rustls::pki_types::ServerName::IpAddress(ip.into()))
+            .unwrap_or_else(|_| {
+                rustls::pki_types::ServerName::try_from(server_host.to_string())
+                    .unwrap_or_else(|_| {
+                        rustls::pki_types::ServerName::try_from("inputsync.local")
+                            .expect("inputsync.local is a valid DNS name")
+                    })
+            });
         let tls_stream = connector.connect(server_name, tcp_stream).await?;
         tracing::info!("TLS handshake complete");
         do_handshake_and_run(tls_stream, session_code, status_tx).await
@@ -94,8 +108,12 @@ where
     stream.write_u8(HS_NONCE_EXCHANGE).await?;
     stream.write_all(&client_base_nonce).await?;
 
-    // Step 5: Send UDP listen port
-    stream.write_u16(CLIENT_UDP_PORT).await?;
+    // Step 5: Bind UDP to OS-assigned port (port 0) to avoid hardcoded port
+    // conflicts when two clients run on the same machine. Report actual port
+    // to the server so it knows where to send events.
+    let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+    let actual_udp_port = udp_socket.local_addr()?.port();
+    stream.write_u16(actual_udp_port).await?;
     stream.flush().await?;
 
     let combined_nonce = combine_nonces(&server_base_nonce, &client_base_nonce);
@@ -106,15 +124,15 @@ where
         bail!("Server did not acknowledge: 0x{:02X}", ack);
     }
 
-    tracing::info!("Handshake complete — session established.");
+    tracing::info!("Handshake complete — session established. UDP port: {}", actual_udp_port);
     let _ = status_tx.send("connected".to_string());
 
-    // ── UDP receive socket ───────────────────────────────────────────────
-    let udp_socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", CLIENT_UDP_PORT)).await?);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
     // ── Simulator thread ─────────────────────────────────────────────────
-    let (sim_tx, sim_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // Bounded sync_channel prevents heap growth when simulator falls behind.
+    // The async UDP task uses try_send to avoid blocking the executor.
+    let (sim_tx, sim_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(SIM_CHANNEL_CAP);
     let status_sim = status_tx.clone();
     std::thread::Builder::new()
         .name("inputsync-simulator".into())
@@ -181,7 +199,10 @@ where
                                             matched - current
                                         );
                                     }
-                                    let _ = sim_tx.send(plain);
+                                    // try_send: discard packet if simulator is backed up
+                                    if sim_tx.try_send(plain).is_err() {
+                                        tracing::trace!("Simulator queue full — packet dropped");
+                                    }
                                 }
                                 None => {
                                     tracing::warn!(

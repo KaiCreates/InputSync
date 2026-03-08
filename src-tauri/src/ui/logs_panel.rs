@@ -6,13 +6,8 @@ pub fn show(ui_state: &mut UiState, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label("Logs");
         ui.checkbox(&mut ui_state.log_scroll_to_bottom, "Auto-scroll");
-        if ui.small_button("Clear").clicked() {
-            // egui_logger 0.6 does not expose a clear function
-        }
-        if ui.small_button("Export").clicked() {
-            // Simple export: write log lines to ~/.local/share/inputsync/inputsync.log
-            // egui_logger doesn't expose raw records, so we skip file export for now
-        }
+        // Clear/Export are not yet supported by egui_logger 0.6 — hidden to
+        // avoid showing non-functional buttons.
     });
 
     ui.separator();

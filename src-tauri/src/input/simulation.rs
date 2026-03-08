@@ -123,6 +123,9 @@ fn keycode_to_enigo(kc: KeyCode) -> Option<Key> {
         F7  => Some(Key::F7),  F8  => Some(Key::F8),  F9  => Some(Key::F9),
         F10 => Some(Key::F10), F11 => Some(Key::F11), F12 => Some(Key::F12),
         // Modifiers
+        // Note: enigo 0.2 does not expose Key::AltGr/RControl/RShift separately,
+        // so left and right variants map to the same logical key. AltGr distinction
+        // requires upgrading to a newer enigo release.
         LeftCtrl  | RightCtrl  => Some(Key::Control),
         LeftShift | RightShift => Some(Key::Shift),
         LeftAlt   | RightAlt   => Some(Key::Alt),

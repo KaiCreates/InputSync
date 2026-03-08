@@ -164,7 +164,7 @@ async fn async_main(
                         Err(e) => {
                             let _ = net_tx
                                 .send(NetEvent::Error(format!("Capture error: {}", e)));
-                            handle.shutdown();
+                            handle.shutdown().await;
                             continue;
                         }
                     };
@@ -212,15 +212,16 @@ async fn async_main(
                 }
 
                 let ssl_enabled = locked.config.ssl_enabled;
+                let control_port = locked.config.control_port;
                 let tls_connector = if ssl_enabled {
                     Some(crate::network::tls::make_tls_connector())
                 } else {
                     None
                 };
 
-                let (status_tx, _status_rx) = mpsc::unbounded_channel::<String>();
+                let (status_tx, mut status_rx) = mpsc::unbounded_channel::<String>();
                 let handle =
-                    match connect_to_server(&ip, &code, status_tx, tls_connector).await {
+                    match connect_to_server(&ip, &code, control_port, status_tx, tls_connector).await {
                         Ok(h) => h,
                         Err(e) => {
                             let _ = net_tx
@@ -231,9 +232,22 @@ async fn async_main(
 
                 locked.client = Some(ClientState {
                     handle,
-                    server_addr: format!("{}:24800", ip),
+                    server_addr: format!("{}:{}", ip, control_port),
                     latency_ms: None,
                     last_error: None,
+                });
+
+                // Forward disconnect events from the client UDP task to the UI.
+                // Without this the receiver is dropped and all status sends silently fail.
+                let net_tx_status = net_tx.clone();
+                let shared_status = shared.clone();
+                tokio::spawn(async move {
+                    while let Some(msg) = status_rx.recv().await {
+                        if msg.starts_with("disconnected") || msg.starts_with("simulator_error") {
+                            shared_status.lock().await.client = None;
+                            let _ = net_tx_status.send(NetEvent::Disconnected);
+                        }
+                    }
                 });
 
                 tracing::info!("Connected to {}", ip);

@@ -25,13 +25,15 @@ pub struct InputSyncApp {
 
 impl InputSyncApp {
     pub fn new(
-        _cc: &eframe::CreationContext<'_>,
+        cc: &eframe::CreationContext<'_>,
         cmd_tx: mpsc::UnboundedSender<UiCommand>,
         net_rx: mpsc::UnboundedReceiver<NetEvent>,
         shared: SharedState,
         config: ServerConfig,
         data_dir: PathBuf,
     ) -> Self {
+        // Set dark theme once at startup instead of every frame.
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
         Self {
             cmd_tx,
             net_rx,
@@ -81,9 +83,6 @@ impl eframe::App for InputSyncApp {
             std::time::Duration::from_millis(500)
         };
         ctx.request_repaint_after(repaint_delay);
-
-        // Apply dark theme
-        ctx.set_visuals(egui::Visuals::dark());
 
         egui::CentralPanel::default().show(ctx, |ui| {
             crate::ui::show(&mut self.ui, ui, &self.status, &self.cmd_tx, &self.data_dir);

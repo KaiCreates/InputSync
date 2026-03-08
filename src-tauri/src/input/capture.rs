@@ -150,6 +150,7 @@ pub fn start_capture(
             let mut last_y: f64 = 0.0;
             let mut first_move = true;
             let mut local_seq: u32 = 0;
+            let mut was_forwarding = false;
 
             let callback = move |event: Event| {
                 if stop_rx.try_recv().is_ok() {
@@ -168,11 +169,19 @@ pub fn start_capture(
                     check_edge_trigger(*x, *y, &config, screen_size, &forwarding);
                 }
 
-                if !forwarding.load(Ordering::Relaxed) {
+                let is_forwarding = forwarding.load(Ordering::Relaxed);
+
+                // Reset mouse baseline when forwarding is re-enabled to avoid a
+                // large delta jump on the client from the cursor position change
+                // that occurred while forwarding was off.
+                if is_forwarding && !was_forwarding {
+                    first_move = true;
+                }
+                was_forwarding = is_forwarding;
+
+                if !is_forwarding {
                     return;
                 }
-
-                local_seq = local_seq.wrapping_add(1);
 
                 let packet: Option<InputPacket> = match &event.event_type {
                     EventType::MouseMove { x, y } => {
@@ -233,7 +242,11 @@ pub fn start_capture(
                     }
                 };
 
+                // Only advance seq when a packet is actually emitted.
+                // Advancing it for dropped events (first_move, zero delta, zero wheel)
+                // would create spurious counter gaps on the receiver side.
                 if let Some(pkt) = packet {
+                    local_seq = local_seq.wrapping_add(1);
                     if event_tx.try_send(pkt).is_err() {
                         tracing::trace!("Input queue full — packet dropped");
                     }
