@@ -2395,7 +2395,7 @@ dependencies = [
 
 [[package]]
 name = "inputsync"
-version = "1.0.3"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "chacha20poly1305",

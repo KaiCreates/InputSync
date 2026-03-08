@@ -1,6 +1,6 @@
 [package]
 name = "inputsync"
-version = "1.1.0"
+version = "1.1.1"
 description = "InputSync - Software KVM Switch"
 authors = ["KaiCreates"]
 edition = "2021"
@@ -80,6 +80,8 @@ copyright = "2026 KaiCreates"
 license-file = ["../LICENSE", "0"]
 extended-description = "InputSync is a lightweight, encrypted software KVM switch. Control multiple computers with one keyboard and mouse — no hardware required. Built with pure Rust + egui, no WebView2 or browser engine needed."
 depends = "libgtk-3-0, libx11-6, libxtst6, libxdo3"
+conflicts = ["input-sync"]
+replaces = ["input-sync"]
 section = "utils"
 priority = "optional"
 assets = [

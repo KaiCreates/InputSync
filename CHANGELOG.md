@@ -7,6 +7,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.1] — 2026-03-08
+
+### Fixed
+
+**Linux — .deb install fails with file conflict against old `input-sync` package:**
+- Installing `inputsync_1.1.1_amd64.deb` on a machine that previously had the old
+  Tauri-based `input-sync` package would fail: dpkg refused to overwrite shared icon
+  files (`/usr/share/icons/hicolor/*/apps/inputsync.png`) owned by `input-sync`.
+- Added `Conflicts: input-sync` and `Replaces: input-sync` to the package metadata.
+  dpkg now automatically removes the old package when installing InputSync 1.1.1+.
+- The "Broken pipe / lzma write error" was a side-effect of dpkg aborting mid-extract
+  on the conflict — resolved by the same fix.
+
+**Linux — "Illegal instruction (core dumped)" on non-AVX2 CPUs:**
+- Binary was compiled with `target-cpu=native` (AVX2/AVX512 instructions) and cached
+  dependency objects were reused even after changing the CPU target. Full `cargo clean`
+  plus `-C target-feature=-avx,-avx2,-avx512f` ensures the binary runs on any x86_64
+  CPU, not just Haswell-era and newer.
+
+---
+
 ## [1.1.0] — 2026-03-08
 
 ### Changed
