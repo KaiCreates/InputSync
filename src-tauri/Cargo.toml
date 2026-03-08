@@ -72,3 +72,20 @@ panic = "abort"
 
 [profile.dev]
 opt-level = 1
+
+[package.metadata.deb]
+name = "inputsync"
+maintainer = "KaiCreates <kai@kaicreates.dev>"
+copyright = "2026 KaiCreates"
+license-file = ["../LICENSE", "0"]
+extended-description = "InputSync is a lightweight, encrypted software KVM switch. Control multiple computers with one keyboard and mouse — no hardware required. Built with pure Rust + egui, no WebView2 or browser engine needed."
+depends = "libgtk-3-0, libx11-6, libxtst6, libxdo3"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/inputsync", "usr/bin/inputsync", "755"],
+    ["inputsync.desktop", "usr/share/applications/inputsync.desktop", "644"],
+    ["icons/128x128.png", "usr/share/icons/hicolor/128x128/apps/inputsync.png", "644"],
+    ["icons/256x256.png", "usr/share/icons/hicolor/256x256/apps/inputsync.png", "644"],
+    ["icons/32x32.png", "usr/share/icons/hicolor/32x32/apps/inputsync.png", "644"],
+]
