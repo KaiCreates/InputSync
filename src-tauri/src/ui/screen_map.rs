@@ -1,5 +1,5 @@
 use eframe::egui;
-use eframe::egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
 use crate::state::{DeadCorners, DeadZone, EdgeTriggers};
 

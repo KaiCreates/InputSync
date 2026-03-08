@@ -1,11 +1,9 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use eframe::egui;
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
 
-use crate::state::{AppStatus, Role, ServerConfig, SharedState};
+use crate::state::{AppStatus, ServerConfig, SharedState};
 use crate::ui::UiState;
 use crate::{NetEvent, UiCommand};
 
@@ -90,7 +88,18 @@ impl eframe::App for InputSyncApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // Cleanup: stop server if running
-        let _ = self.cmd_tx.send(UiCommand::StopServer);
+        // Cleanup: stop server if running and release ports.
+        // We use a synchronous channel because on_exit is not async.
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Err(e) = self.cmd_tx.send(UiCommand::Shutdown(tx)) {
+            tracing::error!("Failed to send shutdown command: {}", e);
+            return;
+        }
+
+        // Wait for shutdown to complete (timeout after 2s if async thread hung)
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(_) => tracing::info!("Clean shutdown complete"),
+            Err(e) => tracing::warn!("Shutdown wait failed: {}", e),
+        }
     }
 }

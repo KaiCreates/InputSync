@@ -60,14 +60,62 @@ pub fn show(
     cmd_tx: &mpsc::UnboundedSender<UiCommand>,
     data_dir: &PathBuf,
 ) {
+    // Header
+    ui.add_space(8.0);
+    ui.vertical_centered(|ui| {
+        ui.heading(
+            egui::RichText::new("InputSync")
+                .size(28.0)
+                .strong()
+                .color(egui::Color32::from_rgb(110, 100, 255)),
+        );
+        ui.label(
+            egui::RichText::new("Software KVM Switch")
+                .small()
+                .color(egui::Color32::from_rgb(120, 130, 160)),
+        );
+    });
+    ui.add_space(12.0);
+
     // Tab bar
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut ui_state.active_tab, Tab::Main, "Main");
-        ui.selectable_value(&mut ui_state.active_tab, Tab::Settings, "Settings");
-        ui.selectable_value(&mut ui_state.active_tab, Tab::Logs, "Logs");
+        ui.add_space(12.0);
+        let tab_style = |ui: &mut egui::Ui, selected: bool, label: &str| {
+            let color = if selected {
+                egui::Color32::from_rgb(110, 100, 255)
+            } else {
+                egui::Color32::from_rgb(120, 130, 160)
+            };
+            let text = egui::RichText::new(label).size(15.0).strong();
+            let resp = ui.selectable_label(selected, text);
+            if selected {
+                // Draw a small indicator underline
+                let rect = resp.rect;
+                let line_y = rect.bottom() + 2.0;
+                ui.painter().line_segment(
+                    [egui::pos2(rect.left(), line_y), egui::pos2(rect.right(), line_y)],
+                    egui::Stroke::new(2.0, color),
+                );
+            }
+            resp
+        };
+
+        if tab_style(ui, ui_state.active_tab == Tab::Main, "Main").clicked() {
+            ui_state.active_tab = Tab::Main;
+        }
+        ui.add_space(8.0);
+        if tab_style(ui, ui_state.active_tab == Tab::Settings, "Settings").clicked() {
+            ui_state.active_tab = Tab::Settings;
+        }
+        ui.add_space(8.0);
+        if tab_style(ui, ui_state.active_tab == Tab::Logs, "Logs").clicked() {
+            ui_state.active_tab = Tab::Logs;
+        }
     });
 
+    ui.add_space(4.0);
     ui.separator();
+    ui.add_space(8.0);
 
     match ui_state.active_tab {
         Tab::Main => {

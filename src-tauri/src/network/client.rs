@@ -35,7 +35,11 @@ pub async fn connect_to_server(
     tls_connector: Option<tokio_rustls::TlsConnector>,
 ) -> Result<ClientHandle> {
     let server_tcp_addr = format!("{}:{}", server_host, control_port);
-    let tcp_stream = TcpStream::connect(&server_tcp_addr).await?;
+    let tcp_stream = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        TcpStream::connect(&server_tcp_addr)
+    ).await
+    .map_err(|_| anyhow::anyhow!("Connection timed out (server unreachable)"))??;
     tracing::info!("TCP connected to {}", server_tcp_addr);
 
     if let Some(connector) = tls_connector {

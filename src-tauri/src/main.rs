@@ -13,14 +13,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
 
 use crate::core::session::generate_session_code;
 use crate::input::capture::start_capture;
 use crate::network::client::connect_to_server;
 use crate::network::server::start_server;
 use crate::state::{
-    AppState, ClientState, ServerConfig, ServerState, SharedState, new_shared_state,
+    ClientState, ServerConfig, ServerState, SharedState, new_shared_state,
 };
 
 const INPUT_CHANNEL_CAP: usize = 512;
@@ -34,6 +33,7 @@ pub enum UiCommand {
     Disconnect,
     ToggleCapture,
     UpdateConfig(ServerConfig),
+    Shutdown(std::sync::mpsc::Sender<()>),
 }
 
 /// Events sent from the async runtime → UI thread
@@ -279,6 +279,26 @@ async fn async_main(
                 locked.config = new_cfg.clone();
                 save_config(&data_dir, &new_cfg);
                 tracing::info!("Config saved");
+            }
+
+            UiCommand::Shutdown(done_tx) => {
+                tracing::info!("Shutdown signal received, cleaning up...");
+                let mut locked = shared.lock().await;
+
+                // 1. Stop server
+                if let Some(srv) = locked.server.take() {
+                    drop(srv.capture_handle);
+                    srv.handle.shutdown().await;
+                }
+
+                // 2. Disconnect client
+                if let Some(cli) = locked.client.take() {
+                    cli.handle.disconnect();
+                }
+
+                tracing::info!("Cleanup complete, exiting async loop");
+                let _ = done_tx.send(());
+                break; // Exit the loop
             }
         }
     }
