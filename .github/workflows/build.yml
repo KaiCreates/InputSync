@@ -56,8 +56,8 @@ jobs:
         working-directory: src-tauri/target/release
         run: |
           mkdir -p pkg
-          cp inputsync pkg/
-          sha256sum inputsync > pkg/SHA256SUMS-linux.txt
+          cp inputsync pkg/inputsync-linux-x86_64
+          sha256sum inputsync-linux-x86_64 > pkg/SHA256SUMS-linux.txt
           cat pkg/SHA256SUMS-linux.txt
 
       - name: Upload Linux artifact
@@ -89,12 +89,13 @@ jobs:
         working-directory: src-tauri
         run: cargo build --release
 
-      - name: Compute checksum
+      - name: Package binary and compute checksum
         shell: pwsh
         working-directory: src-tauri/target/release
         run: |
-          Get-FileHash inputsync.exe -Algorithm SHA256 | `
-            ForEach-Object { "$($_.Hash)  inputsync.exe" } | `
+          Copy-Item inputsync.exe inputsync-windows-x86_64.exe
+          Get-FileHash inputsync-windows-x86_64.exe -Algorithm SHA256 | `
+            ForEach-Object { "$($_.Hash)  inputsync-windows-x86_64.exe" } | `
             Out-File -FilePath "SHA256SUMS-windows.txt"
           Get-Content SHA256SUMS-windows.txt
 
@@ -103,7 +104,7 @@ jobs:
         with:
           name: windows-exe
           path: |
-            src-tauri/target/release/inputsync.exe
+            src-tauri/target/release/inputsync-windows-x86_64.exe
             src-tauri/target/release/SHA256SUMS-windows.txt
           if-no-files-found: error
 
@@ -142,20 +143,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: "InputSync ${{ github.ref_name }}"
+          name: "InputSync ${{ github.ref_name }} — Native Rust KVM Switch"
           draft: false
           prerelease: false
           files: |
-            release-assets/linux/inputsync
+            release-assets/linux/inputsync-linux-x86_64
             release-assets/linux/SHA256SUMS-linux.txt
-            release-assets/windows/inputsync.exe
+            release-assets/windows/inputsync-windows-x86_64.exe
             release-assets/windows/SHA256SUMS-windows.txt
           body: |
-            ## InputSync ${{ github.ref_name }}
+            ## InputSync ${{ github.ref_name }} — Native Rust KVM Switch
 
-            Cross-platform software KVM switch — control multiple computers with one keyboard and mouse over your local network, with end-to-end encryption.
+            Control multiple computers with one keyboard and mouse over your local network — end-to-end encrypted, no browser engine, no installer, no runtime dependencies.
 
-            **No WebView2 required.** Native egui GUI — single portable binary (~9MB).
+            **Pure Rust + egui. Single portable binary. ~9 MB.**
+
+            ---
+
+            ### What's New in ${{ github.ref_name }}
+
+            **Architecture — Full migration from Tauri/WebView2/React to pure Rust + egui:**
+            - Replaced the entire Tauri + React frontend with a native egui (eframe 0.31 + glow) UI — no browser engine, no WebView2, no Node.js required at build or runtime
+            - Single portable native binary (~9 MB stripped) replaces the old .deb/.exe installer packages
+            - Windows no longer requires WebView2 Runtime — completely self-contained executable
+
+            **New features:**
+            - Screen edge switching — move the cursor to any configured screen edge to automatically forward control to the connected client
+            - Dead corners — configurable corner regions that block edge triggers to prevent accidental switching
+            - Dead zones — configurable rectangular screen regions that suppress edge activation
+            - Optional TLS transport — self-signed TOFU certificate via rcgen + rustls + tokio-rustls, layered on top of the existing ChaCha20 session encryption
+            - Settings persistence — all configuration saved to `~/.local/share/inputsync/config.json`
+            - In-app log viewer — real-time log output in the Logs tab
+            - Mini screen-map widget — clickable widget in Settings for configuring edge targets
+            - Tabs: Main | Settings | Logs
+
+            **Bug fixes:**
+            - Server restart after stop — `Start Server` now auto-stops any running server; no stale state
+            - Stopped TCP listener now releases port immediately on shutdown
 
             ---
 
@@ -163,8 +187,10 @@ jobs:
 
             | Platform | File | Notes |
             |----------|------|-------|
-            | **Linux** (x86_64) | `inputsync` | Run directly, no install needed |
-            | **Windows** (10/11 x64) | `inputsync.exe` | Run directly, no installer needed |
+            | **Linux** (x86_64) | `inputsync-linux-x86_64` | Run directly — no install needed |
+            | **Windows** (10/11 x64) | `inputsync-windows-x86_64.exe` | Run directly — no installer, no WebView2 |
+
+            Checksums: `SHA256SUMS-linux.txt` / `SHA256SUMS-windows.txt`
 
             ---
 
@@ -172,8 +198,8 @@ jobs:
 
             1. **Server (keyboard/mouse machine):** Run InputSync → Start Server → note the 6-character code + IP
             2. **Client (machine to control):** Run InputSync → Enter code + IP → Connect
-            3. **Switch control:** Press **ScrollLock** or click Forwarding toggle
-            4. All input events are encrypted end-to-end (X25519 + ChaCha20-Poly1305)
+            3. **Switch control:** Move cursor to a configured screen edge, or press **ScrollLock**, or click the Forwarding toggle
+            4. All input events are encrypted end-to-end (X25519 ECDH + ChaCha20-Poly1305)
 
             ---
 
@@ -181,7 +207,7 @@ jobs:
 
             **Linux:** `libx11`, `libxtst`, `libxdo`, `libwayland` (most distros include these)
             **Windows:** Windows 10+ x64 — no additional runtime required
-            **Network:** TCP :24800 + UDP :24801-24802 open on server
+            **Network:** TCP :24800 + UDP :24801-24802 open on the server machine
 
             ---
 
@@ -189,13 +215,14 @@ jobs:
 
             ```bash
             # Linux
-            sha256sum -c SHA256SUMS.txt
-            chmod +x inputsync && ./inputsync
+            sha256sum -c SHA256SUMS-linux.txt
+            chmod +x inputsync-linux-x86_64 && ./inputsync-linux-x86_64
 
             # Windows (PowerShell)
-            Get-FileHash inputsync.exe -Algorithm SHA256
+            Get-FileHash inputsync-windows-x86_64.exe -Algorithm SHA256
+            # Compare against SHA256SUMS-windows.txt
             ```
 
             ---
 
-            *Built with Rust + egui (no WebView2, no Electron)*
+            *Built with Rust + egui — no WebView2, no Electron, no Node.js*
