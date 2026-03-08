@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
+use std::time::Duration;
 
 use crate::core::crypto::{combine_nonces, derive_session_key, EphemeralKeypair, SessionCipher};
 use crate::core::protocol::{
@@ -173,6 +174,8 @@ where
 
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(5));
+        let mut last_pkt_time = std::time::Instant::now();
 
         loop {
             tokio::select! {
@@ -180,9 +183,17 @@ where
                     tracing::info!("Client UDP loop: shutdown signal");
                     break;
                 }
+                _ = ping_interval.tick() => {
+                    // If no packets received for 15 seconds, assume disconnected
+                    if last_pkt_time.elapsed() > Duration::from_secs(15) {
+                        tracing::warn!("Connection timeout (no UDP packets for 15s)");
+                        break;
+                    }
+                }
                 result = udp_socket.recv_from(&mut buf) => {
                     match result {
                         Ok((len, _src)) => {
+                            last_pkt_time = std::time::Instant::now();
                             let encrypted = &buf[..len];
                             let current = counter.load(Ordering::Relaxed);
 
@@ -197,6 +208,19 @@ where
                             match decrypted {
                                 Some((plain, matched)) => {
                                     counter.store(matched + 1, Ordering::Relaxed);
+
+                                    // Handle Enter/Exit signals and Pings immediately
+                                    if !plain.is_empty() {
+                                        match plain[0] {
+                                            crate::core::protocol::PKT_ENTER_SCREEN => tracing::debug!("Received signal: ENTER_SCREEN"),
+                                            crate::core::protocol::PKT_EXIT_SCREEN => tracing::debug!("Received signal: EXIT_SCREEN"),
+                                            crate::core::protocol::PKT_PING => {
+                                                // Server heartbeat received
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
                                     if matched > current {
                                         tracing::debug!(
                                             "Counter resync: skipped {} dropped packets",

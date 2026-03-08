@@ -121,22 +121,39 @@ pub async fn start_server(
             }
         }
     });
+// ── UDP broadcast loop ───────────────────────────────────────────────
+let udp = udp_socket.clone();
+let clients_udp = clients.clone();
+let mut input_rx = input_rx;
+let cancel_udp = cancel.clone();
+tokio::spawn(async move {
+    let mut pkt_counter: u64 = 0;
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(5));
 
-    // ── UDP broadcast loop ───────────────────────────────────────────────
-    let udp = udp_socket.clone();
-    let clients_udp = clients.clone();
-    let mut input_rx = input_rx;
-    let cancel_udp = cancel.clone();
-    tokio::spawn(async move {
-        let mut pkt_counter: u64 = 0;
-        loop {
-            tokio::select! {
-                biased;
-                _ = cancel_udp.cancelled() => {
-                    tracing::info!("UDP broadcast loop stopped");
-                    break;
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel_udp.cancelled() => {
+                tracing::info!("UDP broadcast loop stopped");
+                break;
+            }
+            _ = ping_interval.tick() => {
+                // Send heartbeats to keep UDP NAT mappings open and detect dead clients
+                let targets: Vec<(Arc<SessionCipher>, SocketAddr)> = {
+                    let locked = clients_udp.lock().await;
+                    locked.iter().map(|c| (c.cipher.clone(), c.udp_addr)).collect()
+                };
+
+                let ping_pkt = InputPacket::ping(0).to_wire();
+                for (cipher, addr) in &targets {
+                    if let Ok(encrypted) = cipher.encrypt(&ping_pkt, pkt_counter) {
+                        let _ = udp.send_to(&encrypted, *addr).await;
+                    }
                 }
-                maybe_pkt = input_rx.recv() => {
+                pkt_counter = pkt_counter.wrapping_add(1);
+            }
+            maybe_pkt = input_rx.recv() => {
+...
                     let pkt = match maybe_pkt {
                         Some(p) => p,
                         None => {

@@ -1,6 +1,10 @@
 use anyhow::{bail, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// Protocol version for handshake compatibility
+pub const PROTOCOL_VERSION_MAJOR: u16 = 1;
+pub const PROTOCOL_VERSION_MINOR: u16 = 2;
+
 // Packet type constants
 pub const PKT_MOUSE_MOVE: u8 = 0x01;
 pub const PKT_MOUSE_BUTTON: u8 = 0x02;
@@ -8,6 +12,8 @@ pub const PKT_KEY: u8 = 0x03;
 pub const PKT_CLIPBOARD: u8 = 0x04;
 pub const PKT_PING: u8 = 0x05;
 pub const PKT_PONG: u8 = 0x06;
+pub const PKT_ENTER_SCREEN: u8 = 0x07;
+pub const PKT_EXIT_SCREEN: u8 = 0x08;
 
 // Handshake message types (TCP control channel)
 pub const HS_CLIENT_HELLO: u8 = 0x10;
@@ -228,6 +234,20 @@ impl InputPacket {
         Self {
             header: PacketHeader::new(PKT_PING, 0, 4),
             payload,
+        }
+    }
+
+    pub fn enter_screen() -> Self {
+        Self {
+            header: PacketHeader::new(PKT_ENTER_SCREEN, 0, 0),
+            payload: Vec::new(),
+        }
+    }
+
+    pub fn exit_screen() -> Self {
+        Self {
+            header: PacketHeader::new(PKT_EXIT_SCREEN, 0, 0),
+            payload: Vec::new(),
         }
     }
 

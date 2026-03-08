@@ -171,11 +171,12 @@ pub fn start_capture(
 
                 let is_forwarding = forwarding.load(Ordering::Relaxed);
 
-                // Reset mouse baseline when forwarding is re-enabled to avoid a
-                // large delta jump on the client from the cursor position change
-                // that occurred while forwarding was off.
+                // Reset mouse baseline and signal screen entry/exit
                 if is_forwarding && !was_forwarding {
                     first_move = true;
+                    let _ = event_tx.try_send(InputPacket::enter_screen());
+                } else if !is_forwarding && was_forwarding {
+                    let _ = event_tx.try_send(InputPacket::exit_screen());
                 }
                 was_forwarding = is_forwarding;
 
