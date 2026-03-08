@@ -1,7 +1,7 @@
 {
   "identifier": "com.inputsync.app",
   "productName": "InputSync",
-  "version": "1.0.2",
+  "version": "1.2.0",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
