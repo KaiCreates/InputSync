@@ -1,6 +1,6 @@
 [package]
 name = "inputsync"
-version = "1.1.1"
+version = "1.1.2"
 description = "InputSync - Software KVM Switch"
 authors = ["KaiCreates"]
 edition = "2021"
@@ -19,9 +19,9 @@ egui_extras = "0.31"
 # System tray
 tray-icon = "0.19"
 
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Logging — tracing macros forward to the log crate via the "log" feature,
+# which egui_logger captures for in-app display. No separate subscriber needed.
+tracing = { version = "0.1", features = ["log"] }
 egui_logger = "0.6"
 
 # TLS (optional SSL feature)

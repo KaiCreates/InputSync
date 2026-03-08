@@ -285,16 +285,11 @@ async fn async_main(
 }
 
 fn main() {
-    // Init egui_logger — captures log/tracing records into ring buffer for UI display
+    // egui_logger is the sole global logger — it captures all log/tracing records
+    // into a ring buffer displayed in the Logs tab.
+    // tracing macros (info!, warn!, etc.) route through the log crate bridge
+    // enabled by the "log" feature on the tracing crate — no separate subscriber needed.
     egui_logger::builder().init().ok();
-
-    // Also init tracing → forwards to log crate (which egui_logger reads)
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
 
     let data_dir = data_dir();
     std::fs::create_dir_all(&data_dir).ok();

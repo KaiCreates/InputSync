@@ -7,6 +7,23 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.2] — 2026-03-08
+
+### Fixed
+
+**Startup panic: `Unable to install global subscriber: SetLoggerError(())`**
+- The app crashed immediately on launch with a panic from `tracing-subscriber`.
+- Root cause: `egui_logger::builder().init()` and `tracing_subscriber::fmt().init()`
+  both attempt to install the global log backend. Only one can win — the second
+  call panics unconditionally (no `.ok()` guard).
+- Fix: removed `tracing_subscriber::fmt().init()` entirely. Enabled the `log`
+  feature on the `tracing` crate so all `tracing::info!()` / `warn!()` etc. calls
+  automatically bridge to the `log` crate, which `egui_logger` captures for
+  display in the Logs tab. No separate subscriber is needed.
+- Removed `tracing-subscriber` dependency (was only used for the conflicting init).
+
+---
+
 ## [1.1.1] — 2026-03-08
 
 ### Fixed
