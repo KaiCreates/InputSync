@@ -9,8 +9,8 @@
 │  ░  ▌                   ░  │
 │  ░░░░░░░░░░░░░░░░░░░░░░░░  │
 └────────────────────────── ┘
-         ████
-       ████████
+        ████
+      ████████
 ```
 
 # InputSync
@@ -19,7 +19,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-6c63ff.svg)](LICENSE)
 [![Build](https://img.shields.io/github/actions/workflow/status/KaiCreates/InputSync/build.yml?label=Build&logo=github)](https://github.com/KaiCreates/InputSync/actions)
-[![Version](https://img.shields.io/badge/version-1.0.0-3ecf8e)](https://github.com/KaiCreates/InputSync/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-3ecf8e)](https://github.com/KaiCreates/InputSync/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)](https://github.com/KaiCreates/InputSync/releases)
 [![Downloads](https://img.shields.io/github/downloads/KaiCreates/InputSync/total?color=3ecf8e)](https://github.com/KaiCreates/InputSync/releases)
 
@@ -31,7 +31,7 @@
 
 InputSync is a lightweight, encrypted software KVM (Keyboard, Video, Mouse) switch. Run it on two or more computers on the same network and seamlessly share your keyboard and mouse between them — no hardware required.
 
-Think of it like [Barrier](https://github.com/debauchee/barrier) or [InputLeap](https://github.com/input-leap/input-leap), but built from scratch in **Rust + Tauri** with end-to-end encryption baked in from day one.
+Think of it like [Barrier](https://github.com/debauchee/barrier) or [InputLeap](https://github.com/input-leap/input-leap), but built from scratch in **pure Rust + egui** with end-to-end encryption baked in from day one. No browser engine. No Electron. No WebView2. Just a single native binary.
 
 ---
 
@@ -40,9 +40,12 @@ Think of it like [Barrier](https://github.com/debauchee/barrier) or [InputLeap](
 - **🔐 End-to-End Encrypted** — X25519 ECDH key exchange + ChaCha20-Poly1305; no plaintext ever leaves your machine
 - **⚡ Ultra Low Latency** — UDP transport with delta-encoded events; input feels local
 - **🎯 Session Codes** — 6-character alphanumeric codes to pair devices; no IP configuration required
-- **🖥️ Cross-Platform** — Linux (X11 + Wayland) and Windows from a single codebase
-- **🪶 Tiny Footprint** — ~3.5 MB installer; ~10 MB installed; no background services
-- **🎨 Pixel-Art UI** — Minimal dark terminal-themed interface built with React + Tauri
+- **🖱️ Screen Edge Switching** — move the cursor to the edge of the screen to automatically switch control to the client
+- **🚫 Dead Zones & Dead Corners** — block edge triggers in configured screen regions to prevent accidental switching
+- **🖥️ Cross-Platform** — Linux (X11) and Windows from a single Rust codebase
+- **🪶 Tiny Footprint** — ~9 MB native binary; no background services; no runtime dependencies
+- **🎨 Native Dark UI** — Terminal-themed interface built with egui; no browser engine or WebView2 required
+- **🔒 Optional TLS** — Self-signed certificate (TOFU) transport layer on top of the encrypted stream
 - **📋 Clipboard Sync** *(roadmap)* — Paste text across machines seamlessly
 - **🔍 Local Discovery** *(roadmap)* — Auto-detect InputSync servers via mDNS
 
@@ -70,7 +73,7 @@ Think of it like [Barrier](https://github.com/debauchee/barrier) or [InputLeap](
 │  └───────────────────────────────────────────────┘  │
 │                                                     │
 ├─────────────────────────────────────────────────────┤
-│  ● Ready — Start server or connect to one     v1.0  │
+│  ● Ready — Start server or connect to one     v1.1  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -80,38 +83,33 @@ Think of it like [Barrier](https://github.com/debauchee/barrier) or [InputLeap](
 
 ### Linux (Ubuntu / Debian)
 
+Download the `inputsync` binary from [Releases](https://github.com/KaiCreates/InputSync/releases/latest):
+
 ```bash
-# Download the latest .deb
-wget https://github.com/KaiCreates/InputSync/releases/latest/download/InputSync_1.0.0_amd64.deb
+# Download the latest Linux binary
+wget https://github.com/KaiCreates/InputSync/releases/latest/download/inputsync
 
-# Install
-sudo dpkg -i InputSync_1.0.0_amd64.deb
-
-# If missing dependencies
-sudo apt-get install -f
+# Make executable and run
+chmod +x inputsync
+./inputsync
 ```
 
-**Required system libraries** (usually already present):
+**Required system libraries** (usually already present on most Linux desktops):
 ```
-libwebkit2gtk-4.1-0  libgtk-3-0  libayatana-appindicator3-1  libx11-6  libxtst6
+libgtk-3-0  libx11-6  libxtst6  libxdo3
 ```
 
-### Linux (Fedora / RHEL)
+### Linux (Fedora / RHEL / Arch)
 ```bash
-# Extract the .deb and install manually, or build from source
-# (RPM packaging is on the roadmap)
-```
-
-### Linux (Arch)
-```bash
-# AUR package coming soon — build from source in the meantime
+# Build from source — see below
+# RPM and AUR packages are on the roadmap
 ```
 
 ### Windows
 
-1. Download `InputSync_1.0.0_x64-setup.exe` from [Releases](https://github.com/KaiCreates/InputSync/releases/latest)
-2. Run the installer — Windows Defender may prompt; click **More info → Run anyway**
-3. Launch InputSync from the Start Menu
+1. Download `inputsync.exe` from [Releases](https://github.com/KaiCreates/InputSync/releases/latest)
+2. Run it directly — no installer, no runtime dependencies required
+3. Windows Defender may prompt on first launch; click **More info → Run anyway**
 
 ```powershell
 # winget (coming soon)
@@ -141,9 +139,7 @@ Address:       192.168.1.42:24800
 
 ### 3. Start controlling
 
-Back on the server, toggle **Capture: ON** — your keyboard and mouse events will now be forwarded to the connected client.
-
-Toggle it off at any time to regain local control, or press the configured hotkey.
+Move your cursor to the **screen edge** — InputSync automatically forwards control to the connected client. Move it back to the server's edge to return. You can also toggle capture manually from the **Main** tab.
 
 ---
 
@@ -195,6 +191,7 @@ InputSync was designed with security as a first-class concern.
 | Nonce Strategy | Per-packet counter XOR'd with combined server+client nonces |
 | Session Binding | Code + IP pair; codes are single-use per server start |
 | Data at Rest | No keys stored; fresh exchange every session |
+| Optional Transport | TLS (self-signed TOFU) via `rustls` + `rcgen` |
 
 **What is protected:** All keyboard and mouse events, including keystrokes, are encrypted before leaving your machine. An attacker on the same network cannot read your input or replay captured packets.
 
@@ -209,7 +206,10 @@ InputSync was designed with security as a first-class concern.
 | Open Source | ✅ MIT | ✅ GPL | ✅ GPL | ❌ Partial |
 | Encryption | ✅ ChaCha20 | ⚠️ TLS optional | ⚠️ TLS optional | ✅ Paid tier |
 | Session Codes | ✅ Built-in | ❌ Manual IP | ❌ Manual IP | ❌ Manual |
-| Binary Size | ✅ ~3.5 MB | ❌ ~50 MB | ❌ ~50 MB | ❌ Large |
+| Screen Edge Switch | ✅ Built-in | ✅ | ✅ | ✅ |
+| Native Binary | ✅ Pure Rust | ❌ C++ | ❌ C++ | ❌ Large |
+| No Browser Engine | ✅ egui | ❌ | ❌ | ❌ |
+| Binary Size | ✅ ~9 MB | ❌ ~50 MB | ❌ ~50 MB | ❌ Large |
 | Modern Codebase | ✅ Rust 2021 | ❌ Legacy C++ | ❌ Legacy C++ | ❌ Legacy |
 | Linux Wayland | 🔜 Roadmap | ⚠️ Partial | ⚠️ Partial | ❌ No |
 
@@ -221,13 +221,13 @@ InputSync was designed with security as a first-class concern.
 - Ubuntu 22.04+ / Debian 12+ / equivalent
 - X11 display server (Wayland support on roadmap)
 - 64-bit processor
-- `libxtst6`, `libx11-6`, `libgtk-3-0`, `libwebkit2gtk-4.1-0`
+- `libxtst6`, `libx11-6`, `libgtk-3-0`
 
 ### Windows
 - Windows 10 (build 1903) or Windows 11
 - 64-bit processor
-- WebView2 Runtime (bundled in installer)
-- ~10 MB disk space
+- ~15 MB disk space
+- No runtime dependencies — single portable `.exe`
 
 ### Network
 - Both machines on the same local network (LAN/Wi-Fi)
@@ -242,34 +242,25 @@ InputSync was designed with security as a first-class concern.
 # Rust (stable)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Node.js 18+
-nvm install 20
-
 # Linux build dependencies
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
-  libayatana-appindicator3-dev libx11-dev libxtst-dev
-
-# Tauri CLI
-cargo install tauri-cli --version "^2" --locked
+sudo apt install libgtk-3-dev libx11-dev libxtst-dev libxdo-dev
 ```
 
 ### Build
 
 ```bash
 git clone https://github.com/KaiCreates/InputSync
-cd InputSync
+cd InputSync/src-tauri
 
-# Install frontend dependencies
-npm install
+# Build release binary (~35 seconds, ~9 MB output)
+cargo build --release
 
-# Build for current platform
-./build.sh linux    # → InputSync-linux-x64.deb
-./build.sh windows  # → InputSync-windows-x64-setup.exe (requires MinGW)
-./build.sh all      # both
-
-# Development mode (live reload)
-cargo tauri dev
+# Output: target/release/inputsync
+./target/release/inputsync
 ```
+
+### Cross-compile for Windows
+Windows builds are handled by the GitHub Actions workflow (`.github/workflows/build.yml`) using `cross` or the Windows runner. Building locally requires a Windows host or MinGW toolchain.
 
 ---
 
@@ -301,9 +292,13 @@ cargo tauri dev
 
 > Ensure both machines are on a wired or high-quality Wi-Fi connection. UDP packets may be delayed on congested networks. Check for VPN software that might be wrapping UDP traffic in TCP.
 
-**Windows Defender flags the installer**
+**Windows Defender flags the binary**
 
-> InputSync is not code-signed yet. Click **More info → Run anyway** in the SmartScreen prompt. Code signing is on the roadmap for v1.1.
+> InputSync is not code-signed yet. Click **More info → Run anyway** in the SmartScreen prompt. Code signing is on the roadmap for v1.2.
+
+**Edge trigger fires accidentally**
+
+> Configure dead corners or dead zones in the **Settings** tab to block edge triggers in specific screen regions.
 
 ---
 
@@ -314,17 +309,20 @@ cargo tauri dev
 | Core encryption + session system | ✅ v1.0.0 |
 | Input capture (Linux X11 + Windows) | ✅ v1.0.0 |
 | Input simulation (Linux + Windows) | ✅ v1.0.0 |
-| React UI (server + client panels) | ✅ v1.0.0 |
-| Linux .deb + Windows .exe packaging | ✅ v1.0.0 |
-| Clipboard sync | 🔜 v1.1 |
-| Linux Wayland support (libei) | 🔜 v1.1 |
-| mDNS/Bonjour server discovery | 🔜 v1.1 |
-| Hotkey to toggle control | 🔜 v1.1 |
-| Multi-monitor layout configuration | 🔜 v1.2 |
-| macOS support | 🔜 v1.2 |
-| Screen edge switching | 🔜 v1.2 |
-| Code signing (Windows + Linux) | 🔜 v1.1 |
-| RPM / Arch packages | 🔜 v1.1 |
+| Native egui UI (server + client panels, settings, logs) | ✅ v1.1.0 |
+| Screen edge switching | ✅ v1.1.0 |
+| Dead corners + dead zones | ✅ v1.1.0 |
+| Optional TLS transport (TOFU) | ✅ v1.1.0 |
+| Settings persistence (~/.local/share/inputsync) | ✅ v1.1.0 |
+| Clipboard sync | 🔜 v1.2 |
+| Linux Wayland support (libei) | 🔜 v1.2 |
+| mDNS/Bonjour server discovery | 🔜 v1.2 |
+| Configurable switch hotkey | 🔜 v1.2 |
+| Multi-monitor layout configuration | 🔜 v1.3 |
+| macOS support | 🔜 v1.3 |
+| Multi-client support | 🔜 v1.3 |
+| Code signing (Windows + Linux) | 🔜 v1.2 |
+| RPM / Arch packages | 🔜 v1.2 |
 
 ---
 
@@ -334,13 +332,13 @@ InputSync is built on these excellent open-source libraries:
 
 | Library | Purpose |
 |---------|---------|
-| [Tauri](https://tauri.app) | Cross-platform app framework |
+| [eframe / egui](https://github.com/emilk/egui) | Native cross-platform GUI framework |
 | [tokio](https://tokio.rs) | Async Rust runtime |
 | [x25519-dalek](https://github.com/dalek-cryptography/x25519-dalek) | X25519 ECDH |
 | [chacha20poly1305](https://github.com/RustCrypto/AEADs) | ChaCha20-Poly1305 AEAD |
+| [rustls](https://github.com/rustls/rustls) + [rcgen](https://github.com/rustls/rcgen) | Optional TLS |
 | [enigo](https://github.com/enigo-rs/enigo) | Cross-platform input simulation |
 | [rdev](https://github.com/Narsil/rdev) | Cross-platform input capture |
-| [React](https://react.dev) | UI framework |
 
 ---
 
@@ -352,12 +350,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR
 
 Found a vulnerability? See [SECURITY.md](SECURITY.md) for responsible disclosure.
 
-## Code of Conduct
-
-This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
-
 ## License
 
 InputSync is released under the [MIT License](LICENSE).
 
-Copyright © 2025 KaiCreates
+Copyright © 2026 KaiCreates

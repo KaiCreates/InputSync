@@ -7,6 +7,33 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.0] — 2026-03-08
+
+### Changed
+
+**Architecture — Full migration from Tauri/WebView2/React to pure Rust + egui:**
+- Replaced the entire Tauri + React frontend with a native egui (eframe 0.31 + glow) UI — no browser engine, no WebView2, no Node.js required at build or runtime
+- Single portable native binary (~9 MB stripped) replaces the .deb/.exe installer package
+- Windows no longer requires WebView2 Runtime — completely self-contained executable
+
+### Added
+
+- **Screen edge switching** — moving the cursor to any configured screen edge automatically forwards control to the connected client
+- **Dead corners** — configurable corner regions that block edge triggers to prevent accidental switching
+- **Dead zones** — configurable rectangular screen regions that suppress edge activation
+- **Optional TLS transport** — self-signed TOFU certificate via `rcgen` + `rustls` + `tokio-rustls`; layered on top of the existing ChaCha20 session encryption
+- **Settings persistence** — all configuration saved to `~/.local/share/inputsync/config.json` via serde_json
+- **In-app log viewer** — real-time log output in the Logs tab via `egui_logger`
+- **Mini screen-map widget** — clickable Painter-based widget in Settings for configuring edge targets
+- Tabs: Main | Settings | Logs
+
+### Fixed
+
+- **Server restart after stop** — `Start Server` now auto-stops any running server; no stale state
+- Stopped TCP listener now releases port immediately on shutdown
+
+---
+
 ## [1.0.2] — 2026-03-07
 
 ### Fixed
@@ -67,7 +94,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Planned — v1.1
+### Planned — v1.2
 - Clipboard sync across machines
 - Linux Wayland support (libei)
 - mDNS/Bonjour server auto-discovery
@@ -76,8 +103,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Code signing for Windows SmartScreen bypass
 - RPM and Arch (AUR) packages
 
-### Planned — v1.2
-- Multi-monitor layout configuration (edge-based switching)
+### Planned — v1.3
+- Multi-monitor layout configuration
 - macOS support
-- Screen edge cursor switching (like Barrier/InputLeap)
 - Multi-client support with named client slots

@@ -1,8 +1,8 @@
 [package]
 name = "inputsync"
-version = "1.0.3"
+version = "1.1.0"
 description = "InputSync - Software KVM Switch"
-authors = ["InputSync"]
+authors = ["KaiCreates"]
 edition = "2021"
 rust-version = "1.77.2"
 
